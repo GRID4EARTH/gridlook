@@ -19,10 +19,13 @@ export const UPDATE_MODE = {
 
 export type TUpdateMode = (typeof UPDATE_MODE)[keyof typeof UPDATE_MODE];
 
+export type TCoastlineResolution = "50m" | "10m";
+
 export const useGlobeControlStore = defineStore("globeControl", {
   state: () => {
     return {
       showCoastLines: true,
+      coastlineResolution: "50m" as TCoastlineResolution,
       // simplified UI choice (Off|Sea|Land|Globe) — used by controls
       landSeaMaskChoice: LAND_SEA_MASK_MODES.OFF as TLandSeaMaskMode,
       // when true, use the textured versions; when false, use the greyscale/solid versions

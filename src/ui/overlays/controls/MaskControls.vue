@@ -4,7 +4,8 @@ import { storeToRefs } from "pinia";
 import { useGlobeControlStore } from "@/store/store";
 
 const store = useGlobeControlStore();
-const { landSeaMaskChoice, landSeaMaskUseTexture } = storeToRefs(store);
+const { landSeaMaskChoice, landSeaMaskUseTexture, coastlineResolution } =
+  storeToRefs(store);
 </script>
 
 <template>
@@ -54,7 +55,7 @@ const { landSeaMaskChoice, landSeaMaskUseTexture } = storeToRefs(store);
         </div>
       </div>
 
-      <div class="columns compact-row py-2">
+      <div class="columns compact-row py-2 is-flex is-align-items-center">
         <div class="column">
           <input
             id="enable_coastlines"
@@ -63,6 +64,20 @@ const { landSeaMaskChoice, landSeaMaskUseTexture } = storeToRefs(store);
             @change="store.toggleCoastLines"
           />
           <label for="enable_coastlines">Coastlines</label>
+        </div>
+        <div class="column has-text-right">
+          <div class="control has-icons-left">
+            <div class="select is-small">
+              <select
+                id="coastline_resolution"
+                v-model="coastlineResolution"
+                :disabled="!store.showCoastLines"
+              >
+                <option value="50m">50m</option>
+                <option value="10m">10m</option>
+              </select>
+            </div>
+          </div>
         </div>
       </div>
     </div>

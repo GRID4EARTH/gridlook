@@ -10,7 +10,10 @@ import { useSharedGridLogic } from "./composables/useSharedGridLogic.ts";
 import { buildDimensionRangesAndIndices } from "@/lib/data/dimensionHandling.ts";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager.ts";
 import { castDataVarToFloat32, getDataBounds } from "@/lib/data/zarrUtils.ts";
-import { ProjectionHelper } from "@/lib/projection/projectionUtils.ts";
+import {
+  ProjectionHelper,
+  authalicToGeodeticWGS84,
+} from "@/lib/projection/projectionUtils.ts";
 import {
   getColormapScaleOffset,
   makeGpuProjectedTextureMaterial,
@@ -74,6 +77,7 @@ const {
 
 const pendingUpdate = ref(false);
 const updatingData = ref(false);
+const healpixEllipsoid = ref<string | undefined>(undefined);
 
 const HEALPIX_NUMCHUNKS = 12;
 
@@ -155,6 +159,9 @@ function updateMeshProjectionUniforms() {
 async function datasourceUpdate() {
   resetDataVars();
   if (props.datasources !== undefined) {
+    // Read CRS info first so fetchGrid can use the ellipsoid for geometry
+    const crsInfo = await getHealpixCRSInfo();
+    healpixEllipsoid.value = crsInfo.ellipsoid;
     await Promise.all([fetchGrid(), getData()]);
     updateLandSeaMask();
     updateColormap(mainMeshes);
@@ -169,7 +176,8 @@ function fetchGrid() {
         1,
         ipix,
         gridStep,
-        projectionHelper.value
+        projectionHelper.value,
+        healpixEllipsoid.value
       );
       mainMeshes[ipix].geometry.dispose();
       mainMeshes[ipix].geometry = geometry;
@@ -182,14 +190,31 @@ function fetchGrid() {
   }
 }
 
-async function getNside() {
+async function getHealpixCRSInfo() {
   const crs = await ZarrDataManager.getCRSInfo(
     props.datasources!,
     varnameSelector.value
   );
   // FIXME: could probably have other names
   const nside = crs.attrs["healpix_nside"] as number;
-  return nside;
+  // Check CRS for ellipsoid, then fall back to the "cell" coordinate attributes
+  let ellipsoid = (crs.attrs["healpix_ellipsoid"] as string) || undefined;
+  if (!ellipsoid) {
+    try {
+      // Use the same datasource as the main variable to access "cell" coordinate
+      const source = ZarrDataManager.getDatasetSource(
+        props.datasources!,
+        varnameSelector.value
+      );
+      const cellInfo = await ZarrDataManager.getVariableInfo(source, "cell");
+      ellipsoid = (cellInfo.attrs["ellipsoid"] as string) || undefined;
+      console.log("HEALPix cell attrs:", cellInfo.attrs, "ellipsoid:", ellipsoid);
+    } catch (e) {
+      console.log("Could not read cell coordinate ellipsoid:", e);
+    }
+  }
+  console.log("HEALPix CRS info: nside=", nside, "ellipsoid=", ellipsoid);
+  return { nside, ellipsoid };
 }
 
 async function getCells() {
@@ -451,7 +476,8 @@ function makeHealpixGeometry(
   nside: number,
   ipix: number,
   steps: number,
-  helper: ProjectionHelper
+  helper: ProjectionHelper,
+  ellipsoid?: string
 ) {
   const vertexCount = steps * steps;
   const positionValues = new Float32Array(vertexCount * 3);
@@ -466,11 +492,16 @@ function makeHealpixGeometry(
     for (let j = 0; j < steps; ++j) {
       const v = j / (steps - 1);
       const vec = healpix.pixcoord2vec_nest(nside, ipix, u, v);
-      const { lat, lon } = ProjectionHelper.cartesianToLatLon(
+      let { lat, lon } = ProjectionHelper.cartesianToLatLon(
         vec[0],
         vec[1],
         vec[2]
       );
+      // When HEALPix is on an ellipsoid, the library gives authalic latitude;
+      // convert to geodetic latitude for correct geographic positioning.
+      if (ellipsoid === "WGS84") {
+        lat = authalicToGeodeticWGS84(lat);
+      }
       latitudes[vertexIndex] = lat;
       longitudes[vertexIndex] = lon;
       const positionOffset = vertexIndex * 3;
@@ -496,11 +527,11 @@ function makeHealpixGeometry(
 
 function getUnshuffleIndex(
   size: number,
-  unshuffleIndex: { [key: number]: Float32Array }
-): Float32Array {
+  unshuffleIndex: { [key: number]: Uint32Array }
+): Uint32Array {
   if (unshuffleIndex[size] === undefined) {
     const len = size * size;
-    const temp = new Float32Array(len);
+    const temp = new Uint32Array(len);
     let idx = 0;
 
     for (let i = 0; i < size; ++i) {
@@ -515,7 +546,7 @@ function getUnshuffleIndex(
 
 function unshuffleMortonArray(
   arr: Float32Array,
-  unshuffleIndex: { [key: number]: Float32Array }
+  unshuffleIndex: { [key: number]: Uint32Array }
 ): Float32Array {
   const out = arr.slice(); // makes a copy
   const size = Math.floor(Math.sqrt(arr.length));
@@ -528,7 +559,7 @@ function unshuffleMortonArray(
 
 function data2texture(
   arr: Float32Array,
-  unshuffleIndex: { [key: number]: Float32Array }
+  unshuffleIndex: { [key: number]: Uint32Array }
 ) {
   const size = Math.floor(Math.sqrt(arr.length));
   arr = castDataVarToFloat32(arr);
@@ -666,7 +697,9 @@ async function fetchAndRenderData(
   );
 
   const cellCoord = await getCells();
-  const nside = await getNside();
+  const crsInfo = await getHealpixCRSInfo();
+  const nside = crsInfo.nside;
+  healpixEllipsoid.value = crsInfo.ellipsoid;
   const { dataMin, dataMax, histogramSummaries } = await processHealpixChunks(
     datavar,
     cellCoord,
@@ -723,7 +756,8 @@ onBeforeMount(async () => {
       1,
       ipix,
       gridStep,
-      projectionHelper.value
+      projectionHelper.value,
+      healpixEllipsoid.value
     );
     mainMeshes[ipix] = new THREE.Mesh(geometry, material);
     // Disable frustum culling - GPU projection changes actual positions

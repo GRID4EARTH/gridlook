@@ -11,10 +11,12 @@ import {
 } from "@/lib/layers/landSeaMask.ts";
 import { ResourceCache } from "@/lib/layers/ResourceCache.ts";
 import type { ProjectionHelper } from "@/lib/projection/projectionUtils.ts";
+import type { TCoastlineResolution } from "@/store/store.ts";
 
 type UseGridOverlaysOptions = {
   projectionHelper: ComputedRef<ProjectionHelper>;
   showCoastLines: Ref<boolean>;
+  coastlineResolution: Ref<TCoastlineResolution>;
   landSeaMaskChoice: Ref<TLandSeaMaskMode | undefined>;
   landSeaMaskUseTexture: Ref<boolean>;
   getScene: () => THREE.Scene | undefined;
@@ -26,6 +28,7 @@ export function useGridOverlays(options: UseGridOverlaysOptions) {
   const {
     projectionHelper,
     showCoastLines,
+    coastlineResolution,
     landSeaMaskChoice,
     landSeaMaskUseTexture,
     getScene,
@@ -35,12 +38,17 @@ export function useGridOverlays(options: UseGridOverlaysOptions) {
   let coast: THREE.LineSegments | undefined = undefined;
   let landSeaMask: THREE.Object3D | undefined = undefined;
   let coastlineData: FeatureCollection | undefined;
+  let loadedResolution: string | undefined;
+
+  function getCoastlineUrl() {
+    return `static/ne_${coastlineResolution.value}_coastline.geojson`;
+  }
 
   async function getCoastlines() {
-    if (!coastlineData) {
-      coastlineData = await ResourceCache.loadGeoJSON(
-        "static/ne_50m_coastline.geojson"
-      );
+    const url = getCoastlineUrl();
+    if (!coastlineData || loadedResolution !== coastlineResolution.value) {
+      coastlineData = await ResourceCache.loadGeoJSON(url);
+      loadedResolution = coastlineResolution.value;
     }
     if (!coast) {
       const material = new THREE.LineBasicMaterial({

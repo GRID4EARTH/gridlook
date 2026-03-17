@@ -39,6 +39,34 @@ export function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(Number.isFinite(value) ? value : 0, min), max);
 }
 
+/**
+ * Convert authalic latitude to geodetic latitude on the WGS84 ellipsoid.
+ * When HEALPix is defined on an ellipsoid, the pixel positions correspond to
+ * authalic (equal-area) latitudes. This function converts them to geodetic
+ * latitudes so they display at the correct geographic positions.
+ * Series expansion from Snyder (1987), "Map Projections — A Working Manual", p.19.
+ */
+export function authalicToGeodeticWGS84(authalicLatDeg: number): number {
+  // WGS84 eccentricity squared
+  const e2 = 0.00669437999014;
+  const e4 = e2 * e2;
+  const e6 = e4 * e2;
+
+  // Series coefficients (Snyder eq. 3-18)
+  const C1 = e2 / 3 + (31 * e4) / 180 + (59 * e6) / 560;
+  const C2 = (17 * e4) / 360 + (61 * e6) / 1260;
+  const C3 = (383 * e6) / 45360;
+
+  const beta = MathUtils.degToRad(authalicLatDeg);
+  const phi =
+    beta +
+    C1 * Math.sin(2 * beta) +
+    C2 * Math.sin(4 * beta) +
+    C3 * Math.sin(6 * beta);
+
+  return MathUtils.radToDeg(phi);
+}
+
 export class ProjectionHelper {
   readonly type: TProjectionType;
   readonly isFlat: boolean;

@@ -31,6 +31,7 @@ export function useSharedGridLogic() {
   const store = useGlobeControlStore();
   const {
     showCoastLines,
+    coastlineResolution,
     landSeaMaskChoice,
     landSeaMaskUseTexture,
     selection,
@@ -81,6 +82,7 @@ export function useSharedGridLogic() {
   } = useGridOverlays({
     projectionHelper,
     showCoastLines,
+    coastlineResolution,
     landSeaMaskChoice,
     landSeaMaskUseTexture,
     getScene,
@@ -96,12 +98,9 @@ export function useSharedGridLogic() {
     return selection.value;
   });
 
-  watch(
-    () => showCoastLines.value,
-    () => {
-      updateCoastlines();
-    }
-  );
+  watch([() => showCoastLines.value, () => coastlineResolution.value], () => {
+    updateCoastlines();
+  });
 
   watch(
     [() => landSeaMaskChoice.value, () => landSeaMaskUseTexture.value],
