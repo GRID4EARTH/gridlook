@@ -81,6 +81,11 @@ const healpixEllipsoid = ref<string | undefined>(undefined);
 
 const HEALPIX_NUMCHUNKS = 12;
 
+// Limited-area rendering: compact per-cell geometry + tiny texture
+// instead of 12 full-sphere nside² textures (3 GB for nside=8192)
+let limitedAreaMode = false;
+let limitedAreaTexSize = 0;
+
 let mainMeshes: THREE.Mesh<
   THREE.BufferGeometry<THREE.NormalBufferAttributes>,
   THREE.Material,
@@ -159,10 +164,39 @@ function updateMeshProjectionUniforms() {
 async function datasourceUpdate() {
   resetDataVars();
   if (props.datasources !== undefined) {
-    // Read CRS info first so fetchGrid can use the ellipsoid for geometry
     const crsInfo = await getHealpixCRSInfo();
     healpixEllipsoid.value = crsInfo.ellipsoid;
-    await Promise.all([fetchGrid(), getData()]);
+
+    const cellCoord = await getCells();
+
+    if (cellCoord && cellCoord.length > 0) {
+      // Limited-area mode: compact per-cell geometry + tiny texture
+      limitedAreaMode = true;
+      const { geometry, texSize } = buildLimitedAreaGeometry(
+        cellCoord,
+        crsInfo.nside,
+        projectionHelper.value,
+        healpixEllipsoid.value
+      );
+      limitedAreaTexSize = texSize;
+
+      // Use mesh[0] for compact geometry, hide the rest
+      mainMeshes[0].geometry.dispose();
+      mainMeshes[0].geometry = geometry;
+      for (let i = 1; i < HEALPIX_NUMCHUNKS; i++) {
+        mainMeshes[i].visible = false;
+      }
+      updateMeshProjectionUniforms();
+      await getData();
+    } else {
+      // Global mode: restore 12-mesh approach
+      limitedAreaMode = false;
+      for (let i = 0; i < HEALPIX_NUMCHUNKS; i++) {
+        mainMeshes[i].visible = true;
+      }
+      await Promise.all([fetchGrid(), getData()]);
+    }
+
     updateLandSeaMask();
     updateColormap(mainMeshes);
   }
@@ -525,6 +559,87 @@ function makeHealpixGeometry(
   return { geometry, latitudes, longitudes };
 }
 
+/**
+ * Build compact per-cell geometry for limited-area HEALPix data.
+ * Creates one quad (2 triangles) per cell with UV mapped to a compact texture.
+ * This replaces the 12 full-sphere meshes with a single small mesh.
+ */
+function buildLimitedAreaGeometry(
+  cellCoord: number[],
+  nside: number,
+  helper: ProjectionHelper,
+  ellipsoid?: string
+) {
+  const nCells = cellCoord.length;
+  const texSize = Math.ceil(Math.sqrt(nCells));
+
+  const vertexCount = nCells * 4;
+  const positionValues = new Float32Array(vertexCount * 3);
+  const uvValues = new Float32Array(vertexCount * 2);
+  const latLonValues = new Float32Array(vertexCount * 2);
+  const indices: number[] = [];
+
+  // Cell corners in (u,v) space within the pixel
+  const corners = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ];
+
+  for (let ci = 0; ci < nCells; ci++) {
+    const cellId = cellCoord[ci];
+    const baseVertex = ci * 4;
+
+    // UV: map this cell to its texel in the compact texture
+    const texU = ((ci % texSize) + 0.5) / texSize;
+    const texV = (Math.floor(ci / texSize) + 0.5) / texSize;
+
+    for (let vi = 0; vi < 4; vi++) {
+      const [cu, cv] = corners[vi];
+      const vec = healpix.pixcoord2vec_nest(nside, cellId, cu, cv);
+      let { lat, lon } = ProjectionHelper.cartesianToLatLon(
+        vec[0],
+        vec[1],
+        vec[2]
+      );
+      if (ellipsoid === "WGS84") {
+        lat = authalicToGeodeticWGS84(lat);
+      }
+
+      const vertIdx = baseVertex + vi;
+      helper.projectLatLonToArrays(
+        lat,
+        lon,
+        positionValues,
+        vertIdx * 3,
+        latLonValues,
+        vertIdx * 2
+      );
+      uvValues[vertIdx * 2] = texU;
+      uvValues[vertIdx * 2 + 1] = texV;
+    }
+
+    // Two triangles per cell quad
+    indices.push(baseVertex, baseVertex + 1, baseVertex + 2);
+    indices.push(baseVertex, baseVertex + 2, baseVertex + 3);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(indices);
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positionValues, 3)
+  );
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvValues, 2));
+  geometry.setAttribute(
+    "latLon",
+    new THREE.Float32BufferAttribute(latLonValues, 2)
+  );
+
+  return { geometry, texSize };
+}
+
 function getUnshuffleIndex(
   size: number,
   unshuffleIndex: { [key: number]: Uint32Array }
@@ -687,6 +802,77 @@ async function processHealpixChunks(
   return { dataMin, dataMax, histogramSummaries };
 }
 
+/**
+ * Fast path for limited-area data: fetch all cells at once, pack into
+ * a tiny compact texture (e.g. 68×68 for 4544 cells instead of 12× 8192×8192).
+ */
+async function processLimitedAreaData(
+  datavar: zarr.Array<zarr.DataType, zarr.FetchStore>,
+  nCells: number,
+  texSize: number,
+  indices: (number | zarr.Slice | null)[]
+): Promise<{
+  dataMin: number;
+  dataMax: number;
+  histogramSummaries: THistogramSummary[];
+}> {
+  const localIndices = indices.slice();
+  // Fetch all cells at once (last dimension is the cell dimension)
+  localIndices[localIndices.length - 1] = zarr.slice(0, nCells);
+  const rawData = (
+    await ZarrDataManager.getVariableDataFromArray(datavar, localIndices)
+  ).data;
+  const data = castDataVarToFloat32(rawData as Float32Array);
+
+  // Pack into compact square texture
+  const texData = new Float32Array(texSize * texSize);
+  texData.fill(NaN);
+  texData.set(data.subarray(0, nCells));
+
+  const texture = new THREE.DataTexture(
+    texData,
+    texSize,
+    texSize,
+    THREE.RedFormat,
+    THREE.FloatType,
+    THREE.UVMapping
+  );
+  texture.minFilter = THREE.NearestFilter;
+  texture.magFilter = THREE.NearestFilter;
+  texture.needsUpdate = true;
+
+  let { min, max, missingValue, fillValue } = getDataBounds(datavar, data);
+  if (isNaN(missingValue)) {
+    missingValue = HEALPIX_UNSEEN;
+  }
+  if (isNaN(fillValue)) {
+    fillValue = HEALPIX_UNSEEN;
+  }
+
+  const histogramSummary = buildHistogramSummary(
+    data,
+    min,
+    max,
+    HISTOGRAM_SUMMARY_BINS,
+    fillValue,
+    missingValue
+  );
+
+  // Apply to mesh[0] (the only visible mesh in limited-area mode)
+  const material = mainMeshes[0].material as THREE.ShaderMaterial;
+  material.uniforms.missingValue.value = missingValue;
+  material.uniforms.fillValue.value = fillValue;
+  material.uniforms.data.value.dispose();
+  material.uniforms.data.value = texture;
+  redraw();
+
+  return {
+    dataMin: min,
+    dataMax: max,
+    histogramSummaries: [histogramSummary],
+  };
+}
+
 async function fetchAndRenderData(
   datavar: zarr.Array<zarr.DataType, zarr.FetchStore>,
   updateMode: TUpdateMode
@@ -696,16 +882,31 @@ async function fetchAndRenderData(
     updateMode
   );
 
-  const cellCoord = await getCells();
-  const crsInfo = await getHealpixCRSInfo();
-  const nside = crsInfo.nside;
-  healpixEllipsoid.value = crsInfo.ellipsoid;
-  const { dataMin, dataMax, histogramSummaries } = await processHealpixChunks(
-    datavar,
-    cellCoord,
-    nside,
-    indices
-  );
+  let dataMin: number, dataMax: number;
+  let histogramSummaries: THistogramSummary[];
+
+  if (limitedAreaMode) {
+    // Fast path: single fetch + tiny texture (~18 KB vs 3 GB)
+    const cellCoord = await getCells();
+    ({ dataMin, dataMax, histogramSummaries } = await processLimitedAreaData(
+      datavar,
+      cellCoord!.length,
+      limitedAreaTexSize,
+      indices
+    ));
+  } else {
+    // Standard path: 12 full-sphere chunks
+    const cellCoord = await getCells();
+    const crsInfo = await getHealpixCRSInfo();
+    const nside = crsInfo.nside;
+    healpixEllipsoid.value = crsInfo.ellipsoid;
+    ({ dataMin, dataMax, histogramSummaries } = await processHealpixChunks(
+      datavar,
+      cellCoord,
+      nside,
+      indices
+    ));
+  }
 
   updateHistogram(histogramSummaries, dataMin, dataMax);
 
