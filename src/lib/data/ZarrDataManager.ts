@@ -1,6 +1,7 @@
 import * as zarr from "zarrita";
 
 import { lru } from "@/lib/data/lruStore";
+import { createFetchStore } from "@/lib/data/authStore";
 import type {
   TDataSource,
   TSources,
@@ -44,7 +45,7 @@ export class ZarrDataManager {
     if (!this.fetchStore || this.fetchStorePath !== storePath) {
       this.fetchStorePath = storePath;
       this.fetchStore = zarr.root(
-        lru(new zarr.FetchStore(storePath, { useSuffixRequest: true }))
+        lru(createFetchStore(storePath, { useSuffixRequest: true }))
       );
     }
     const root = this.fetchStore!;

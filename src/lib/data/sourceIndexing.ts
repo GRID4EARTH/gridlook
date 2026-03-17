@@ -9,6 +9,7 @@ import {
 } from "../types/GlobeTypes";
 
 import { lru } from "./lruStore";
+import { createFetchStore } from "./authStore";
 import { ZarrDataManager } from "./ZarrDataManager";
 
 import trim from "@/utils/trim";
@@ -192,7 +193,7 @@ function createIndex(
 
 export async function indexFromZarr(src: string): Promise<TSources> {
   try {
-    const store = await zarr.withConsolidated(lru(new zarr.FetchStore(src)));
+    const store = await zarr.withConsolidated(lru(createFetchStore(src)));
     const root = await zarr.open(store, { kind: "group" });
     const datasources = await processZarrV2Variables(store, root, src);
     return createIndex(
@@ -203,7 +204,7 @@ export async function indexFromZarr(src: string): Promise<TSources> {
     );
   } catch {
     const group = await ZarrDataManager.openZarrV3Metadata(
-      new zarr.FetchStore(src)
+      createFetchStore(src)
     );
     const datasources = processZarrV3Variables(group, src);
     return createIndex(
@@ -245,7 +246,7 @@ async function enrichMetadataWithZarrV2(
 ) {
   for (const [store, vars] of Object.entries(stores)) {
     const zarrStore = await zarr.withConsolidated(
-      lru(new zarr.FetchStore(store))
+      lru(createFetchStore(store))
     );
     const root = await zarr.open(zarrStore, { kind: "group" });
 
@@ -278,7 +279,7 @@ async function enrichMetadataWithZarrV3(
 ) {
   for (const [store, vars] of Object.entries(stores)) {
     const group = await ZarrDataManager.openZarrV3Metadata(
-      new zarr.FetchStore(store)
+      createFetchStore(store)
     );
     if (group.attrs) {
       const rootMetadata = group.attrs as TZarrV3RootMetadata;

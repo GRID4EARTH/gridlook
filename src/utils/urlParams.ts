@@ -15,6 +15,7 @@ const URL_PARAMETERS = {
   DIM_INDICES: "dimIndices",
   DIM_MIN_BOUNDS: "dimMinBounds",
   DIM_MAX_BOUNDS: "dimMaxBounds",
+  AUTH_TOKEN: "token",
 } as const;
 
 type TURLParameterValues = (typeof URL_PARAMETERS)[keyof typeof URL_PARAMETERS];

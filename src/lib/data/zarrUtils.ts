@@ -1,5 +1,6 @@
 import * as zarr from "zarrita";
 
+import { createFetchStore } from "./authStore";
 import { ZarrDataManager } from "./ZarrDataManager";
 
 import { ZARR_FORMAT, type TSources } from "@/lib/types/GlobeTypes";
@@ -243,7 +244,7 @@ async function getZarrV3Attributes(
   storeName: string,
   varname: string
 ): Promise<zarr.Attributes> {
-  const store = new zarr.FetchStore(trim(storeName) + "/" + trim(varname));
+  const store = createFetchStore(trim(storeName) + "/" + trim(varname));
   const group = await ZarrDataManager.openZarrV3Metadata(store);
   const v3Attributes = group.attrs;
   if (v3Attributes.dimension_names) {
