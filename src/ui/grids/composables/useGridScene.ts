@@ -188,6 +188,10 @@ export function useGridScene(options: UseGridSceneOptions) {
     cam.quaternion.identity();
     cam.rotation.set(0, 0, 0);
 
+    cam.near = 0.005;
+    cam.far = 200;
+    cam.updateProjectionMatrix();
+
     cam.position.set(
       bounds.centerX,
       bounds.centerY,
@@ -203,7 +207,7 @@ export function useGridScene(options: UseGridSceneOptions) {
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.ROTATE,
     };
-    controls.minDistance = 1;
+    controls.minDistance = 0.02;
     controls.maxDistance = 200;
   }
 
@@ -212,6 +216,9 @@ export function useGridScene(options: UseGridSceneOptions) {
     controls: OrbitControls
   ) {
     cam.up.set(0, 0, 1);
+    cam.near = 0.1;
+    cam.far = 1000;
+    cam.updateProjectionMatrix();
     controls.enablePan = false;
     controls.enableRotate = true;
     controls.enableDamping = true;
