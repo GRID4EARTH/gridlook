@@ -918,13 +918,15 @@ async function processHealpixChunks(
 
 /** Create a compact square texture from cell data. */
 function createCompactTexture(
-  data: Float32Array,
+  data: ArrayLike<number>,
   nCells: number,
   texSize: number
 ) {
   const texData = new Float32Array(texSize * texSize);
   texData.fill(NaN);
-  texData.set(data.subarray(0, nCells));
+  for (let i = 0; i < nCells; i++) {
+    texData[i] = Number(data[i]);
+  }
   const texture = new THREE.DataTexture(
     texData,
     texSize,
@@ -958,7 +960,7 @@ async function processLimitedAreaData(
   const rawData = (
     await ZarrDataManager.getVariableDataFromArray(datavar, localIndices)
   ).data;
-  const data = castDataVarToFloat32(rawData as Float32Array);
+  const data = castDataVarToFloat32(rawData);
   const texture = createCompactTexture(data, nCells, texSize);
 
   let { min, max, missingValue, fillValue } = getDataBounds(datavar, data);
