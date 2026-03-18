@@ -8,8 +8,8 @@ import {
   type TZarrV3RootMetadata,
 } from "../types/GlobeTypes";
 
-import { lru } from "./lruStore";
 import { createFetchStore } from "./authStore";
+import { lru } from "./lruStore";
 import { ZarrDataManager } from "./ZarrDataManager";
 
 import trim from "@/utils/trim";
@@ -266,9 +266,7 @@ async function enrichMetadataWithZarrV2(
   datasources: Record<string, TDataSource>
 ) {
   for (const [store, vars] of Object.entries(stores)) {
-    const zarrStore = await zarr.withConsolidated(
-      lru(createFetchStore(store))
-    );
+    const zarrStore = await zarr.withConsolidated(lru(createFetchStore(store)));
     const root = await zarr.open(zarrStore, { kind: "group" });
 
     for (const varname of vars) {

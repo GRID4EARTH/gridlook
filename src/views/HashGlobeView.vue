@@ -5,8 +5,8 @@ import { ref, onBeforeMount, type Ref } from "vue";
 
 import GlobeView from "./GlobeView.vue";
 
-import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
 import { setAuthToken } from "@/lib/data/authStore";
+import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
 import { STORE_PARAM_MAPPING, useUrlParameterStore } from "@/store/paramStore";
 import { useGlobeControlStore } from "@/store/store";
 import type { TURLParameterValues } from "@/utils/urlParams";

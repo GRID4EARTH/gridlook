@@ -177,66 +177,65 @@ function updateMeshProjectionUniforms() {
   redraw();
 }
 
+function initMultiscales() {
+  if (!props.datasources?.multiscales) {
+    multiscalesInfo = undefined;
+    return;
+  }
+  multiscalesInfo = props.datasources.multiscales;
+
+  // Pick the right level for current camera distance instead of always
+  // starting at level 0 (finest), which wastes time when zoomed out
+  const cam = getCamera();
+  const distance = cam ? cam.position.length() : 30;
+  const initialLevel = distanceToLevelIndex(distance);
+  multiscalesCurrentIndex = initialLevel;
+
+  if (initialLevel !== 0) {
+    const levelAsset = multiscalesInfo.layout[initialLevel].asset;
+    const levelUrl = multiscalesInfo.baseUrl + "/" + levelAsset;
+    activeDatasources.value = rewriteDatasourcesUrl(
+      props.datasources,
+      levelUrl
+    );
+    ZarrDataManager.invalidateCache();
+    console.log(
+      `Multiscales: initial load at level ${initialLevel} (distance=${distance.toFixed(1)})`
+    );
+  }
+}
+
+async function setupLimitedArea(cellCoord: number[], nside: number) {
+  limitedAreaMode = true;
+  const { geometry, texSize } = buildLimitedAreaGeometry(
+    cellCoord,
+    nside,
+    projectionHelper.value,
+    healpixEllipsoid.value
+  );
+  limitedAreaTexSize = texSize;
+  mainMeshes[0].geometry.dispose();
+  mainMeshes[0].geometry = geometry;
+  for (let i = 1; i < HEALPIX_NUMCHUNKS; i++) {
+    mainMeshes[i].visible = false;
+  }
+  updateMeshProjectionUniforms();
+  await getData();
+}
+
 async function datasourceUpdate() {
   resetDataVars();
   if (props.datasources !== undefined) {
-    // Initialize active datasources (may be rewritten on level switch)
     activeDatasources.value = props.datasources;
-
-    // Detect multiscale pyramid
-    if (props.datasources.multiscales) {
-      multiscalesInfo = props.datasources.multiscales;
-
-      // Pick the right level for current camera distance instead of always
-      // starting at level 0 (finest), which wastes time when zoomed out
-      const cam = getCamera();
-      const distance = cam ? cam.position.length() : 30;
-      const initialLevel = distanceToLevelIndex(distance);
-      multiscalesCurrentIndex = initialLevel;
-
-      if (initialLevel !== 0) {
-        // Redirect to the appropriate level before loading
-        const levelAsset = multiscalesInfo.layout[initialLevel].asset;
-        const levelUrl = multiscalesInfo.baseUrl + "/" + levelAsset;
-        activeDatasources.value = rewriteDatasourcesUrl(
-          props.datasources,
-          levelUrl
-        );
-        ZarrDataManager.invalidateCache();
-        console.log(
-          `Multiscales: initial load at level ${initialLevel} (distance=${distance.toFixed(1)})`
-        );
-      }
-    } else {
-      multiscalesInfo = undefined;
-    }
+    initMultiscales();
 
     const crsInfo = await getHealpixCRSInfo();
     healpixEllipsoid.value = crsInfo.ellipsoid;
-
     const cellCoord = await getCells();
 
     if (cellCoord && cellCoord.length > 0) {
-      // Limited-area mode: compact per-cell geometry + tiny texture
-      limitedAreaMode = true;
-      const { geometry, texSize } = buildLimitedAreaGeometry(
-        cellCoord,
-        crsInfo.nside,
-        projectionHelper.value,
-        healpixEllipsoid.value
-      );
-      limitedAreaTexSize = texSize;
-
-      // Use mesh[0] for compact geometry, hide the rest
-      mainMeshes[0].geometry.dispose();
-      mainMeshes[0].geometry = geometry;
-      for (let i = 1; i < HEALPIX_NUMCHUNKS; i++) {
-        mainMeshes[i].visible = false;
-      }
-      updateMeshProjectionUniforms();
-      await getData();
+      await setupLimitedArea(cellCoord, crsInfo.nside);
     } else {
-      // Global mode: restore 12-mesh approach
       limitedAreaMode = false;
       for (let i = 0; i < HEALPIX_NUMCHUNKS; i++) {
         mainMeshes[i].visible = true;
@@ -247,7 +246,7 @@ async function datasourceUpdate() {
     updateLandSeaMask();
     updateColormap(mainMeshes);
 
-    // Register LOD callback AFTER initial load is complete to avoid race
+    // Register LOD callback AFTER initial load to avoid race conditions
     if (multiscalesInfo) {
       multiscalesDesiredIndex = multiscalesCurrentIndex;
       registerUpdateLOD(checkLevelOfDetail);
@@ -295,7 +294,12 @@ async function getHealpixCRSInfo() {
       );
       const cellInfo = await ZarrDataManager.getVariableInfo(source, "cell");
       ellipsoid = (cellInfo.attrs["ellipsoid"] as string) || undefined;
-      console.log("HEALPix cell attrs:", cellInfo.attrs, "ellipsoid:", ellipsoid);
+      console.log(
+        "HEALPix cell attrs:",
+        cellInfo.attrs,
+        "ellipsoid:",
+        ellipsoid
+      );
     } catch (e) {
       console.log("Could not read cell coordinate ellipsoid:", e);
     }
@@ -612,10 +616,59 @@ function makeHealpixGeometry(
   return { geometry, latitudes, longitudes };
 }
 
+/** Build vertices for a single HEALPix cell quad. */
+function buildCellQuad(
+  ci: number,
+  cellId: number,
+  nside: number,
+  texSize: number,
+  helper: ProjectionHelper,
+  ellipsoid: string | undefined,
+  positionValues: Float32Array,
+  uvValues: Float32Array,
+  latLonValues: Float32Array,
+  indices: number[]
+) {
+  const baseVertex = ci * 4;
+  const texU = ((ci % texSize) + 0.5) / texSize;
+  const texV = (Math.floor(ci / texSize) + 0.5) / texSize;
+  const corners = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ];
+
+  for (let vi = 0; vi < 4; vi++) {
+    const [cu, cv] = corners[vi];
+    const vec = healpix.pixcoord2vec_nest(nside, cellId, cu, cv);
+    let { lat, lon } = ProjectionHelper.cartesianToLatLon(
+      vec[0],
+      vec[1],
+      vec[2]
+    );
+    if (ellipsoid === "WGS84") {
+      lat = authalicToGeodeticWGS84(lat);
+    }
+    const vertIdx = baseVertex + vi;
+    helper.projectLatLonToArrays(
+      lat,
+      lon,
+      positionValues,
+      vertIdx * 3,
+      latLonValues,
+      vertIdx * 2
+    );
+    uvValues[vertIdx * 2] = texU;
+    uvValues[vertIdx * 2 + 1] = texV;
+  }
+  indices.push(baseVertex, baseVertex + 1, baseVertex + 2);
+  indices.push(baseVertex, baseVertex + 2, baseVertex + 3);
+}
+
 /**
  * Build compact per-cell geometry for limited-area HEALPix data.
  * Creates one quad (2 triangles) per cell with UV mapped to a compact texture.
- * This replaces the 12 full-sphere meshes with a single small mesh.
  */
 function buildLimitedAreaGeometry(
   cellCoord: number[],
@@ -625,71 +678,33 @@ function buildLimitedAreaGeometry(
 ) {
   const nCells = cellCoord.length;
   const texSize = Math.ceil(Math.sqrt(nCells));
-
   const vertexCount = nCells * 4;
   const positionValues = new Float32Array(vertexCount * 3);
   const uvValues = new Float32Array(vertexCount * 2);
   const latLonValues = new Float32Array(vertexCount * 2);
   const indices: number[] = [];
 
-  // Cell corners in (u,v) space within the pixel
-  const corners = [
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [0, 1],
-  ];
-
   for (let ci = 0; ci < nCells; ci++) {
-    const cellId = cellCoord[ci];
-    const baseVertex = ci * 4;
-
-    // UV: map this cell to its texel in the compact texture
-    const texU = ((ci % texSize) + 0.5) / texSize;
-    const texV = (Math.floor(ci / texSize) + 0.5) / texSize;
-
-    for (let vi = 0; vi < 4; vi++) {
-      const [cu, cv] = corners[vi];
-      const vec = healpix.pixcoord2vec_nest(nside, cellId, cu, cv);
-      let { lat, lon } = ProjectionHelper.cartesianToLatLon(
-        vec[0],
-        vec[1],
-        vec[2]
-      );
-      if (ellipsoid === "WGS84") {
-        lat = authalicToGeodeticWGS84(lat);
-      }
-
-      const vertIdx = baseVertex + vi;
-      helper.projectLatLonToArrays(
-        lat,
-        lon,
-        positionValues,
-        vertIdx * 3,
-        latLonValues,
-        vertIdx * 2
-      );
-      uvValues[vertIdx * 2] = texU;
-      uvValues[vertIdx * 2 + 1] = texV;
-    }
-
-    // Two triangles per cell quad
-    indices.push(baseVertex, baseVertex + 1, baseVertex + 2);
-    indices.push(baseVertex, baseVertex + 2, baseVertex + 3);
+    buildCellQuad(
+      ci,
+      cellCoord[ci],
+      nside,
+      texSize,
+      helper,
+      ellipsoid,
+      positionValues,
+      uvValues,
+      latLonValues,
+      indices
+    );
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setIndex(indices);
-  geometry.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(positionValues, 3)
+  const geometry = createGeometry(
+    positionValues,
+    uvValues,
+    latLonValues,
+    indices
   );
-  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvValues, 2));
-  geometry.setAttribute(
-    "latLon",
-    new THREE.Float32BufferAttribute(latLonValues, 2)
-  );
-
   return { geometry, texSize };
 }
 
@@ -855,6 +870,29 @@ async function processHealpixChunks(
   return { dataMin, dataMax, histogramSummaries };
 }
 
+/** Create a compact square texture from cell data. */
+function createCompactTexture(
+  data: Float32Array,
+  nCells: number,
+  texSize: number
+) {
+  const texData = new Float32Array(texSize * texSize);
+  texData.fill(NaN);
+  texData.set(data.subarray(0, nCells));
+  const texture = new THREE.DataTexture(
+    texData,
+    texSize,
+    texSize,
+    THREE.RedFormat,
+    THREE.FloatType,
+    THREE.UVMapping
+  );
+  texture.minFilter = THREE.NearestFilter;
+  texture.magFilter = THREE.NearestFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 /**
  * Fast path for limited-area data: fetch all cells at once, pack into
  * a tiny compact texture (e.g. 68×68 for 4544 cells instead of 12× 8192×8192).
@@ -870,29 +908,12 @@ async function processLimitedAreaData(
   histogramSummaries: THistogramSummary[];
 }> {
   const localIndices = indices.slice();
-  // Fetch all cells at once (last dimension is the cell dimension)
   localIndices[localIndices.length - 1] = zarr.slice(0, nCells);
   const rawData = (
     await ZarrDataManager.getVariableDataFromArray(datavar, localIndices)
   ).data;
   const data = castDataVarToFloat32(rawData as Float32Array);
-
-  // Pack into compact square texture
-  const texData = new Float32Array(texSize * texSize);
-  texData.fill(NaN);
-  texData.set(data.subarray(0, nCells));
-
-  const texture = new THREE.DataTexture(
-    texData,
-    texSize,
-    texSize,
-    THREE.RedFormat,
-    THREE.FloatType,
-    THREE.UVMapping
-  );
-  texture.minFilter = THREE.NearestFilter;
-  texture.magFilter = THREE.NearestFilter;
-  texture.needsUpdate = true;
+  const texture = createCompactTexture(data, nCells, texSize);
 
   let { min, max, missingValue, fillValue } = getDataBounds(datavar, data);
   if (isNaN(missingValue)) {
@@ -902,16 +923,6 @@ async function processLimitedAreaData(
     fillValue = HEALPIX_UNSEEN;
   }
 
-  const histogramSummary = buildHistogramSummary(
-    data,
-    min,
-    max,
-    HISTOGRAM_SUMMARY_BINS,
-    fillValue,
-    missingValue
-  );
-
-  // Apply to mesh[0] (the only visible mesh in limited-area mode)
   const material = mainMeshes[0].material as THREE.ShaderMaterial;
   material.uniforms.missingValue.value = missingValue;
   material.uniforms.fillValue.value = fillValue;
@@ -922,17 +933,23 @@ async function processLimitedAreaData(
   return {
     dataMin: min,
     dataMax: max,
-    histogramSummaries: [histogramSummary],
+    histogramSummaries: [
+      buildHistogramSummary(
+        data,
+        min,
+        max,
+        HISTOGRAM_SUMMARY_BINS,
+        fillValue,
+        missingValue
+      ),
+    ],
   };
 }
 
 /**
  * Rewrite all store URLs in a TSources to point to a different level subgroup.
  */
-function rewriteDatasourcesUrl(
-  sources: TSources,
-  newUrl: string
-): TSources {
+function rewriteDatasourcesUrl(sources: TSources, newUrl: string): TSources {
   const rewritten = JSON.parse(JSON.stringify(sources)) as TSources;
   for (const level of rewritten.levels) {
     level.grid.store = newUrl;

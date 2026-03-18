@@ -15,7 +15,8 @@ export default defineConfig({
       // This avoids CORS preflight issues with the X-Auth-Token header.
       // Usage: set the Zarr URL to http://localhost:5173/datahub/data/<file_id>
       "/datahub": {
-        target: "https://cesnet-oneprovider-01.datahub.egi.eu/api/v3/oneprovider",
+        target:
+          "https://cesnet-oneprovider-01.datahub.egi.eu/api/v3/oneprovider",
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/datahub/, ""),
         configure: (proxy) => {

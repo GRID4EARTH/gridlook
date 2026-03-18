@@ -1,7 +1,7 @@
 import * as zarr from "zarrita";
 
-import { lru } from "@/lib/data/lruStore";
 import { createFetchStore } from "@/lib/data/authStore";
+import { lru } from "@/lib/data/lruStore";
 import type {
   TDataSource,
   TSources,
