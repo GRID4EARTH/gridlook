@@ -960,7 +960,13 @@ async function processLimitedAreaData(
   const rawData = (
     await ZarrDataManager.getVariableDataFromArray(datavar, localIndices)
   ).data;
-  const data = castDataVarToFloat32(rawData);
+  // Always convert to Float32Array — zarrita may return Float64Array or
+  // cross-realm typed arrays where instanceof checks fail
+  const numericData = rawData as ArrayLike<number | bigint>;
+  const data = new Float32Array(numericData.length);
+  for (let i = 0; i < numericData.length; i++) {
+    data[i] = Number(numericData[i]);
+  }
   const texture = createCompactTexture(data, nCells, texSize);
 
   let { min, max, missingValue, fillValue } = getDataBounds(datavar, data);
