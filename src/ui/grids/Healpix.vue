@@ -19,7 +19,11 @@ import {
   makeGpuProjectedTextureMaterial,
   updateProjectionUniforms,
 } from "@/lib/shaders/gridShaders.ts";
-import type { TDimensionRange, TSources } from "@/lib/types/GlobeTypes.ts";
+import type {
+  TDimensionRange,
+  TMultiscalesInfo,
+  TSources,
+} from "@/lib/types/GlobeTypes.ts";
 import { useUrlParameterStore } from "@/store/paramStore.ts";
 import {
   UPDATE_MODE,
@@ -61,12 +65,14 @@ const { paramDimIndices, paramDimMinBounds, paramDimMaxBounds } =
 
 const {
   getScene,
+  getCamera,
   redraw,
   makeSnapshot,
   toggleRotate,
   resetDataVars,
   getDataVar,
   fetchDimensionDetails,
+  registerUpdateLOD,
   updateLandSeaMask,
   updateColormap,
   updateHistogram,
@@ -85,6 +91,16 @@ const HEALPIX_NUMCHUNKS = 12;
 // instead of 12 full-sphere nside² textures (3 GB for nside=8192)
 let limitedAreaMode = false;
 let limitedAreaTexSize = 0;
+
+// Multiscale pyramid: automatic level-of-detail selection based on camera zoom
+let multiscalesInfo: TMultiscalesInfo | undefined = undefined;
+let multiscalesCurrentIndex = 0;
+let multiscalesSwitching = false;
+let multiscalesDesiredIndex = 0;
+let multiscalesDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const MULTISCALES_DEBOUNCE_MS = 400; // wait for zoom to settle before switching
+// Active datasources: starts as props.datasources, rewritten on level switch
+const activeDatasources = ref<TSources | undefined>(undefined);
 
 let mainMeshes: THREE.Mesh<
   THREE.BufferGeometry<THREE.NormalBufferAttributes>,
@@ -164,6 +180,37 @@ function updateMeshProjectionUniforms() {
 async function datasourceUpdate() {
   resetDataVars();
   if (props.datasources !== undefined) {
+    // Initialize active datasources (may be rewritten on level switch)
+    activeDatasources.value = props.datasources;
+
+    // Detect multiscale pyramid
+    if (props.datasources.multiscales) {
+      multiscalesInfo = props.datasources.multiscales;
+
+      // Pick the right level for current camera distance instead of always
+      // starting at level 0 (finest), which wastes time when zoomed out
+      const cam = getCamera();
+      const distance = cam ? cam.position.length() : 30;
+      const initialLevel = distanceToLevelIndex(distance);
+      multiscalesCurrentIndex = initialLevel;
+
+      if (initialLevel !== 0) {
+        // Redirect to the appropriate level before loading
+        const levelAsset = multiscalesInfo.layout[initialLevel].asset;
+        const levelUrl = multiscalesInfo.baseUrl + "/" + levelAsset;
+        activeDatasources.value = rewriteDatasourcesUrl(
+          props.datasources,
+          levelUrl
+        );
+        ZarrDataManager.invalidateCache();
+        console.log(
+          `Multiscales: initial load at level ${initialLevel} (distance=${distance.toFixed(1)})`
+        );
+      }
+    } else {
+      multiscalesInfo = undefined;
+    }
+
     const crsInfo = await getHealpixCRSInfo();
     healpixEllipsoid.value = crsInfo.ellipsoid;
 
@@ -199,6 +246,12 @@ async function datasourceUpdate() {
 
     updateLandSeaMask();
     updateColormap(mainMeshes);
+
+    // Register LOD callback AFTER initial load is complete to avoid race
+    if (multiscalesInfo) {
+      multiscalesDesiredIndex = multiscalesCurrentIndex;
+      registerUpdateLOD(checkLevelOfDetail);
+    }
   }
 }
 
@@ -226,7 +279,7 @@ function fetchGrid() {
 
 async function getHealpixCRSInfo() {
   const crs = await ZarrDataManager.getCRSInfo(
-    props.datasources!,
+    activeDatasources.value!,
     varnameSelector.value
   );
   // FIXME: could probably have other names
@@ -237,7 +290,7 @@ async function getHealpixCRSInfo() {
     try {
       // Use the same datasource as the main variable to access "cell" coordinate
       const source = ZarrDataManager.getDatasetSource(
-        props.datasources!,
+        activeDatasources.value!,
         varnameSelector.value
       );
       const cellInfo = await ZarrDataManager.getVariableInfo(source, "cell");
@@ -256,7 +309,7 @@ async function getCells() {
     let cells = (
       await ZarrDataManager.getVariableData(
         ZarrDataManager.getDatasetSource(
-          props.datasources!,
+          activeDatasources.value!,
           varnameSelector.value
         ),
         "cell"
@@ -704,7 +757,7 @@ async function getData(updateMode: TUpdateMode = UPDATE_MODE.INITIAL_LOAD) {
       pendingUpdate.value = false;
       const datavar = await getDataVar(
         varnameSelector.value,
-        props.datasources!
+        activeDatasources.value!
       );
       if (datavar) {
         await fetchAndRenderData(datavar, updateMode);
@@ -724,7 +777,7 @@ async function prepareDimensionData(
   updateMode: TUpdateMode
 ) {
   const dimensionNames = await ZarrDataManager.getDimensionNames(
-    props.datasources!,
+    activeDatasources.value!,
     varnameSelector.value
   );
   const { dimensionRanges, indices } = buildDimensionRangesAndIndices(
@@ -748,7 +801,7 @@ async function getDimensionValues(
 ) {
   const dimValues = await fetchDimensionDetails(
     varnameSelector.value,
-    props.datasources!,
+    activeDatasources.value!,
     dimensionRanges,
     indices
   );
@@ -871,6 +924,140 @@ async function processLimitedAreaData(
     dataMax: max,
     histogramSummaries: [histogramSummary],
   };
+}
+
+/**
+ * Rewrite all store URLs in a TSources to point to a different level subgroup.
+ */
+function rewriteDatasourcesUrl(
+  sources: TSources,
+  newUrl: string
+): TSources {
+  const rewritten = JSON.parse(JSON.stringify(sources)) as TSources;
+  for (const level of rewritten.levels) {
+    level.grid.store = newUrl;
+    level.time.store = newUrl;
+    for (const ds of Object.values(level.datasources)) {
+      ds.store = newUrl;
+    }
+  }
+  return rewritten;
+}
+
+/**
+ * Map camera distance to the best pyramid level index.
+ * Closer camera → finer resolution (lower index).
+ * Globe radius ≈ 1, camera distance ranges ~1.1 (close) to ~30+ (far).
+ */
+function distanceToLevelIndex(distance: number): number {
+  if (!multiscalesInfo) {
+    return 0;
+  }
+  const numLevels = multiscalesInfo.layout.length;
+  // Logarithmic scale: distance 1.5→20 maps to level 0→(numLevels-1)
+  const minDist = 1.5;
+  const maxDist = 20;
+  const clamped = Math.max(minDist, Math.min(maxDist, distance));
+  const t = Math.log(clamped / minDist) / Math.log(maxDist / minDist);
+  const index = Math.floor(t * numLevels);
+  return Math.max(0, Math.min(numLevels - 1, index));
+}
+
+/**
+ * LOD callback: runs every frame during interaction, checks if camera
+ * distance warrants a different pyramid level. Uses debouncing so the
+ * switch only fires once the zoom has settled for MULTISCALES_DEBOUNCE_MS.
+ */
+function checkLevelOfDetail() {
+  if (!multiscalesInfo || multiscalesSwitching) {
+    return;
+  }
+  const cam = getCamera();
+  if (!cam) {
+    return;
+  }
+
+  const distance = cam.position.length();
+  const newIndex = distanceToLevelIndex(distance);
+
+  if (newIndex !== multiscalesDesiredIndex) {
+    multiscalesDesiredIndex = newIndex;
+    // Reset debounce timer: only switch once zoom settles
+    if (multiscalesDebounceTimer) {
+      clearTimeout(multiscalesDebounceTimer);
+    }
+    multiscalesDebounceTimer = setTimeout(() => {
+      multiscalesDebounceTimer = null;
+      if (
+        multiscalesDesiredIndex !== multiscalesCurrentIndex &&
+        !multiscalesSwitching
+      ) {
+        console.log(
+          `LOD: switching from level ${multiscalesCurrentIndex} to ${multiscalesDesiredIndex}`
+        );
+        multiscalesCurrentIndex = multiscalesDesiredIndex;
+        void switchMultiscaleLevel(multiscalesDesiredIndex);
+      }
+    }, MULTISCALES_DEBOUNCE_MS);
+  }
+}
+
+/**
+ * Switch to a different pyramid level: update datasource URLs, rebuild
+ * geometry, and re-fetch data.
+ */
+async function switchMultiscaleLevel(levelIndex: number) {
+  if (!multiscalesInfo || !props.datasources) {
+    return;
+  }
+  multiscalesSwitching = true;
+  store.startLoading();
+
+  try {
+    const levelAsset = multiscalesInfo.layout[levelIndex].asset;
+    const levelUrl = multiscalesInfo.baseUrl + "/" + levelAsset;
+    activeDatasources.value = rewriteDatasourcesUrl(
+      props.datasources,
+      levelUrl
+    );
+    // Invalidate cached store so ZarrDataManager fetches from the new URL
+    ZarrDataManager.invalidateCache();
+
+    // Re-read CRS and cells from the new level
+    const crsInfo = await getHealpixCRSInfo();
+    healpixEllipsoid.value = crsInfo.ellipsoid;
+    const cellCoord = await getCells();
+
+    if (cellCoord && cellCoord.length > 0) {
+      limitedAreaMode = true;
+      const { geometry, texSize } = buildLimitedAreaGeometry(
+        cellCoord,
+        crsInfo.nside,
+        projectionHelper.value,
+        healpixEllipsoid.value
+      );
+      limitedAreaTexSize = texSize;
+      mainMeshes[0].geometry.dispose();
+      mainMeshes[0].geometry = geometry;
+      for (let i = 1; i < HEALPIX_NUMCHUNKS; i++) {
+        mainMeshes[i].visible = false;
+      }
+      updateMeshProjectionUniforms();
+    }
+
+    // Re-fetch data for the new level
+    await getData();
+    updateColormap(mainMeshes);
+    console.log(
+      `LOD: level ${levelIndex} loaded (nside=${crsInfo.nside}, cells=${cellCoord?.length ?? "global"})`
+    );
+  } catch (error) {
+    console.error("LOD: switchMultiscaleLevel FAILED", error);
+    throw error;
+  } finally {
+    multiscalesSwitching = false;
+    store.stopLoading();
+  }
 }
 
 async function fetchAndRenderData(

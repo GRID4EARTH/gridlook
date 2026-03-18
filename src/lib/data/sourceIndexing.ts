@@ -206,6 +206,27 @@ export async function indexFromZarr(src: string): Promise<TSources> {
     const group = await ZarrDataManager.openZarrV3Metadata(
       createFetchStore(src)
     );
+
+    // Detect multiscales metadata: redirect to the finest level subgroup
+    // Note: openZarrV3Metadata puts the full zarr.json as group.attrs,
+    // so actual group attributes are nested under group.attrs.attributes
+    const rootAttrs = group.attrs as TZarrV3RootMetadata;
+    const groupAttrs = (rootAttrs?.attributes ?? {}) as Record<string, unknown>;
+    if (groupAttrs?.multiscales) {
+      const ms = groupAttrs.multiscales as {
+        layout: Array<{ asset: string; [key: string]: unknown }>;
+      };
+      if (ms.layout?.length > 0) {
+        const baseUrl = src.replace(/\/$/, "");
+        const finestAsset = ms.layout[0].asset;
+        const levelUrl = baseUrl + "/" + finestAsset;
+        // Recursively index the subgroup (it's a regular zarr group)
+        const index = await indexFromZarr(levelUrl);
+        index.multiscales = { baseUrl, layout: ms.layout };
+        return index;
+      }
+    }
+
     const datasources = processZarrV3Variables(group, src);
     return createIndex(
       group.attrs?.title as string,

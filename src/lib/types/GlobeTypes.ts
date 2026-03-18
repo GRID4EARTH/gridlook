@@ -61,10 +61,21 @@ export type TModelInfo = {
   colormaps: TColorMap[];
 };
 
+export type TMultiscalesLevel = {
+  asset: string;
+  [key: string]: unknown;
+};
+
+export type TMultiscalesInfo = {
+  baseUrl: string;
+  layout: TMultiscalesLevel[];
+};
+
 export type TSources = {
   name?: string;
   zarr_format: TZarrFormat;
   default_var?: string;
+  multiscales?: TMultiscalesInfo;
   levels: {
     name?: string;
     grid: {
