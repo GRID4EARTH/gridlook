@@ -283,23 +283,43 @@ async function getHealpixCRSInfo() {
   );
   // FIXME: could probably have other names
   const nside = crs.attrs["healpix_nside"] as number;
-  // Check CRS for ellipsoid, then fall back to the "cell" coordinate attributes
-  let ellipsoid = (crs.attrs["healpix_ellipsoid"] as string) || undefined;
+  // Check DGGS convention for ellipsoid, then CRS attrs, then cell coordinate attrs
+  let ellipsoid: string | undefined;
+  try {
+    const source = ZarrDataManager.getDatasetSource(
+      activeDatasources.value!,
+      varnameSelector.value
+    );
+    const group = await ZarrDataManager.getDatasetGroup(source);
+    const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
+    if (dggs?.ellipsoid) {
+      const ell = dggs.ellipsoid as Record<string, unknown>;
+      ellipsoid = (ell.name as string)?.toUpperCase() || undefined;
+    }
+  } catch {
+    // Fall through
+  }
+  if (!ellipsoid) {
+    ellipsoid = (crs.attrs["healpix_ellipsoid"] as string) || undefined;
+  }
   if (!ellipsoid) {
     try {
-      // Use the same datasource as the main variable to access "cell" coordinate
       const source = ZarrDataManager.getDatasetSource(
         activeDatasources.value!,
         varnameSelector.value
       );
-      const cellInfo = await ZarrDataManager.getVariableInfo(source, "cell");
-      ellipsoid = (cellInfo.attrs["ellipsoid"] as string) || undefined;
-      console.log(
-        "HEALPix cell attrs:",
-        cellInfo.attrs,
-        "ellipsoid:",
-        ellipsoid
-      );
+      const coordName = await getCellCoordinateName();
+      for (const name of [coordName, "cell", "cell_ids"]) {
+        try {
+          const cellInfo = await ZarrDataManager.getVariableInfo(source, name);
+          ellipsoid = (cellInfo.attrs["ellipsoid"] as string) || undefined;
+          if (ellipsoid) {
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
     } catch (e) {
       console.log("Could not read cell coordinate ellipsoid:", e);
     }
@@ -308,24 +328,50 @@ async function getHealpixCRSInfo() {
   return { nside, ellipsoid };
 }
 
-async function getCells() {
+async function getCellCoordinateName(): Promise<string> {
+  // Check DGGS convention metadata for the coordinate name
   try {
-    let cells = (
-      await ZarrDataManager.getVariableData(
-        ZarrDataManager.getDatasetSource(
-          activeDatasources.value!,
-          varnameSelector.value
-        ),
-        "cell"
-      )
-    ).data as Int32Array | BigInt64Array | number[];
-    if (typeof cells[0] === "bigint") {
-      cells = Array.from(cells, Number) as number[];
+    const source = ZarrDataManager.getDatasetSource(
+      activeDatasources.value!,
+      varnameSelector.value
+    );
+    const group = await ZarrDataManager.getDatasetGroup(source);
+    const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
+    if (dggs?.coordinate && typeof dggs.coordinate === "string") {
+      return dggs.coordinate;
     }
-    return cells as number[];
   } catch {
-    return undefined;
+    // Fall through to defaults
   }
+  return "cell";
+}
+
+async function getCells() {
+  const source = ZarrDataManager.getDatasetSource(
+    activeDatasources.value!,
+    varnameSelector.value
+  );
+  const coordName = await getCellCoordinateName();
+  // Try the DGGS coordinate name first, then common fallbacks
+  const candidates =
+    coordName === "cell"
+      ? ["cell", "cell_ids"]
+      : [coordName, "cell", "cell_ids"];
+  for (const name of candidates) {
+    try {
+      let cells = (await ZarrDataManager.getVariableData(source, name)).data as
+        | Int32Array
+        | BigInt64Array
+        | number[];
+      if (typeof cells[0] === "bigint") {
+        cells = Array.from(cells, Number) as number[];
+      }
+      return cells as number[];
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }
 
 function getHealpixChunkRange(ipix: number, numChunks: number, nside: number) {
