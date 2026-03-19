@@ -1,5 +1,6 @@
 <script lang="ts" setup>
-import * as healpix from "@hscmap/healpix";
+// eslint-disable-next-line camelcase
+import { pixcoord2vec_nest_nside, bit_combine } from "@eopf-dggs/healpix-geo";
 import { storeToRefs } from "pinia";
 import * as THREE from "three";
 import { computed, onBeforeMount, onMounted, ref, watch } from "vue";
@@ -628,7 +629,7 @@ function makeHealpixGeometry(
     const u = i / (steps - 1);
     for (let j = 0; j < steps; ++j) {
       const v = j / (steps - 1);
-      const vec = healpix.pixcoord2vec_nest(nside, ipix, u, v);
+      const vec = pixcoord2vec_nest_nside(nside, BigInt(ipix), u, v);
       let { lat, lon } = ProjectionHelper.cartesianToLatLon(
         vec[0],
         vec[1],
@@ -687,7 +688,7 @@ function buildCellQuad(
 
   for (let vi = 0; vi < 4; vi++) {
     const [cu, cv] = corners[vi];
-    const vec = healpix.pixcoord2vec_nest(nside, cellId, cu, cv);
+    const vec = pixcoord2vec_nest_nside(nside, BigInt(cellId), cu, cv);
     let { lat, lon } = ProjectionHelper.cartesianToLatLon(
       vec[0],
       vec[1],
@@ -765,7 +766,7 @@ function getUnshuffleIndex(
 
     for (let i = 0; i < size; ++i) {
       for (let j = 0; j < size; ++j) {
-        temp[idx++] = healpix.bit_combine(j, i);
+        temp[idx++] = Number(bit_combine(j, i));
       }
     }
     unshuffleIndex[size] = temp;
@@ -1019,19 +1020,31 @@ function rewriteDatasourcesUrl(sources: TSources, newUrl: string): TSources {
  * Map camera distance to the best pyramid level index.
  * Closer camera → finer resolution (lower index).
  * Globe radius ≈ 1, camera distance ranges ~1.1 (close) to ~30+ (far).
+ * Skips levels with more cells than the browser can handle.
  */
 function distanceToLevelIndex(distance: number): number {
   if (!multiscalesInfo) {
     return 0;
   }
-  const numLevels = multiscalesInfo.layout.length;
-  // Logarithmic scale: distance 1.5→20 maps to level 0→(numLevels-1)
+  const layout = multiscalesInfo.layout;
+  const numLevels = layout.length;
+
+  // Cap the finest usable level. Levels are ordered finest-first (index 0 =
+  // highest resolution). For large pyramids, the finest levels may have too
+  // many cells for the browser. Allow at most 7 usable levels (matching the
+  // 5-level RIOMAR pyramid + some margin). For a pyramid with 11 levels,
+  // this skips levels 0–3 (the finest) and uses levels 4–10.
+  const MAX_USABLE_LEVELS = 7;
+  const finestAllowed = Math.max(0, numLevels - MAX_USABLE_LEVELS);
+  const usableLevels = numLevels - finestAllowed;
+
+  // Logarithmic scale: distance 1.5→20 maps across usable levels
   const minDist = 1.5;
   const maxDist = 20;
   const clamped = Math.max(minDist, Math.min(maxDist, distance));
   const t = Math.log(clamped / minDist) / Math.log(maxDist / minDist);
-  const index = Math.floor(t * numLevels);
-  return Math.max(0, Math.min(numLevels - 1, index));
+  const index = Math.floor(t * usableLevels) + finestAllowed;
+  return Math.max(finestAllowed, Math.min(numLevels - 1, index));
 }
 
 /**
