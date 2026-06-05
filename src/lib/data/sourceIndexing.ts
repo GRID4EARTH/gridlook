@@ -162,6 +162,10 @@ function createIndex(
 }
 
 export async function indexFromZarr(src: string): Promise<TSources> {
+  // Format detection: try Zarr v2 consolidated metadata first, then fall back
+  // to v3. Both are fully supported; v2 is attempted first only because it is
+  // historically the more common on-disk layout. Zarr v3 stores (e.g. DGGS
+  // HEALPix pyramids) resolve through the v3 branch below.
   try {
     const store = await zarr.withConsolidatedMetadata(
       await ZarrDataManager.createNewStore(src),
@@ -212,8 +216,9 @@ function collectStores(
 }
 
 /**
- * Enrich the index with dimension names and attributes from Zarr V2
- * consolidated metadata.
+ * Enrich the index with dimension names and attributes from consolidated
+ * metadata. Works for both Zarr v2 (.zmetadata) and Zarr v3 (consolidated
+ * zarr.json); the format is selected by the `format` argument.
  */
 async function enrichMetadata(
   stores: Record<string, Set<string>>,
