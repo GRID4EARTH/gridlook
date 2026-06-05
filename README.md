@@ -4,16 +4,32 @@ GridLook is a WebGL-based viewer for Earth system model (ESM) output. It support
 
 ![](docs/assets/showcase.webp)
 
+## HEALPix & DGGS support
+
+This GRID4EARTH build adds native support for **ellipsoidal HEALPix** grids
+following the [DGGS Zarr convention](https://github.com/zarr-conventions/dggs),
+powered by [`@eopf-dggs/healpix-geo`](https://github.com/EOPF-DGGS/healpix-geo):
+
+- HEALPix pixels defined on the **WGS84 ellipsoid** (DGGS `ellipsoid: WGS84`),
+  with authalic→geodetic latitude correction so the data aligns with coastlines.
+- DGGS metadata read from the dataset group attributes (`attrs.dggs`): the cell
+  coordinate name (`dggs.coordinate`) and ellipsoid (`dggs.ellipsoid.name`),
+  with fallbacks for `cell` / `cell_ids` coordinates.
+- Full **Zarr v3** support (via zarrita, incl. blosc/zstd/lz4 codecs).
+
+Plain spherical HEALPix datasets continue to render exactly as before; the
+ellipsoidal path is only taken when ellipsoid metadata is present.
+
 ## Try It Live
 
-Try out the example dataset:
+This build is deployed to GitHub Pages:
 
-https://gridlook.pages.dev
+https://grid4earth.github.io/gridlook/
 
 You can view any CORS-enabled, public Zarr dataset with GridLook:
 
 ```
-https://gridlook.pages.dev/#<ZARR_URI>
+https://grid4earth.github.io/gridlook/#<ZARR_URI>
 ```
 
 Gridlook can also load catalog JSON files that list multiple datasets. The catalog format and deployment options are documented in [docs/catalogs.md](docs/catalogs.md).
