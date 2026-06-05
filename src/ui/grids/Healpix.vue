@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { pixcoord2vec_nest_nside as pixcoord2vecNestNside } from "@eopf-dggs/healpix-geo";
 import * as healpix from "@hscmap/healpix";
 import { storeToRefs } from "pinia";
 import * as THREE from "three";
@@ -27,7 +28,10 @@ import {
   getMissingValue,
   mapMissingAndFillToNaN,
 } from "@/lib/data/zarrUtils.ts";
-import { ProjectionHelper } from "@/lib/projection/projectionUtils.ts";
+import {
+  authalicToGeodeticWGS84,
+  ProjectionHelper,
+} from "@/lib/projection/projectionUtils.ts";
 import {
   getColormapScaleOffset,
   makeGpuProjectedTextureMaterial,
@@ -106,6 +110,11 @@ const hoverData = ref<Float32Array | null>(null);
 const hoverCellIndexMap = ref<Map<number, number> | null>(null);
 const hoverNside = ref<number | null>(null);
 
+// Detected ellipsoid name for the current dataset (e.g. "WGS84") following the
+// DGGS Zarr convention, or undefined for a plain spherical HEALPix grid.
+// Resolved in fetchGrid() before geometry is built and reused when rendering.
+const healpixEllipsoid = ref<string | undefined>(undefined);
+
 const HEALPIX_NUMCHUNKS = 12;
 
 let mainMeshes: Array<THREE.Mesh | undefined> = new Array(HEALPIX_NUMCHUNKS);
@@ -137,15 +146,17 @@ const { datasourceUpdate } = useGridDataLoader({
   updateColormap: () => updateColormap(mainMeshes),
 });
 
-function fetchGrid() {
+async function fetchGrid() {
   const gridStep = 64 + 1;
   try {
+    healpixEllipsoid.value = await getEllipsoid();
     for (let ipix = 0; ipix < HEALPIX_NUMCHUNKS; ipix++) {
       const { geometry } = makeHealpixGeometry(
         1,
         ipix,
         gridStep,
-        projectionHelper.value
+        projectionHelper.value,
+        healpixEllipsoid.value
       );
       const mesh = mainMeshes[ipix];
       if (!mesh) {
@@ -173,22 +184,84 @@ async function getNside() {
   return nside;
 }
 
-async function getCells() {
+// DGGS Zarr convention: the dataset group may declare the cell-coordinate
+// name in `attrs.dggs.coordinate`. Falls back to the conventional "cell".
+async function getCellCoordinateName(): Promise<string> {
   try {
-    const rawCells = (
-      await ZarrDataManager.getVariableData(
-        ZarrDataManager.getDatasetSource(
-          props.datasources!,
-          varnameSelector.value
-        ),
-        "cell"
+    const group = await ZarrDataManager.getDatasetGroup(
+      ZarrDataManager.getDatasetSource(
+        props.datasources!,
+        varnameSelector.value
       )
-    ).data as ArrayLike<number | bigint>;
-
-    return Array.from(rawCells, (cell) => Number(cell));
+    );
+    const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
+    if (dggs?.coordinate) {
+      return String(dggs.coordinate);
+    }
   } catch {
-    return undefined;
+    // ignore – fall back to the default name
   }
+  return "cell";
+}
+
+// Resolve the ellipsoid the HEALPix grid is defined on, trying in order:
+//   1. DGGS convention  group.attrs.dggs.ellipsoid.name
+//   2. CRS attribute     crs.attrs.healpix_ellipsoid
+//   3. cell coordinate   <coord>.attrs.ellipsoid
+// Returns an upper-cased name (e.g. "WGS84") or undefined for a sphere.
+async function getEllipsoid(): Promise<string | undefined> {
+  try {
+    const group = await ZarrDataManager.getDatasetGroup(
+      ZarrDataManager.getDatasetSource(
+        props.datasources!,
+        varnameSelector.value
+      )
+    );
+    const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
+    const ell = dggs?.ellipsoid as Record<string, unknown> | undefined;
+    if (ell?.name) {
+      return String(ell.name).toUpperCase();
+    }
+  } catch {
+    // ignore – try the next source
+  }
+  try {
+    const crs = await ZarrDataManager.getCRSInfo(
+      props.datasources!,
+      varnameSelector.value
+    );
+    if (crs.attrs["healpix_ellipsoid"]) {
+      return String(crs.attrs["healpix_ellipsoid"]).toUpperCase();
+    }
+  } catch {
+    // ignore – treat as spherical
+  }
+  return undefined;
+}
+
+async function getCells() {
+  const source = ZarrDataManager.getDatasetSource(
+    props.datasources!,
+    varnameSelector.value
+  );
+  const coordName = await getCellCoordinateName();
+  // Try the DGGS-declared coordinate first, then the conventional names.
+  const tried = new Set<string>();
+  for (const name of [coordName, "cell", "cell_ids"]) {
+    if (tried.has(name)) {
+      continue;
+    }
+    tried.add(name);
+    try {
+      const rawCells = (await ZarrDataManager.getVariableData(source, name))
+        .data as ArrayLike<number | bigint>;
+      // zarrita returns BigInt64Array for int64 cell ids; Number() normalizes.
+      return Array.from(rawCells, (cell) => Number(cell));
+    } catch {
+      // try the next candidate name
+    }
+  }
+  return undefined;
 }
 
 function getHealpixChunkRange(ipix: number, numChunks: number, nside: number) {
@@ -431,7 +504,8 @@ function makeHealpixGeometry(
   nside: number,
   ipix: number,
   steps: number,
-  helper: ProjectionHelper
+  helper: ProjectionHelper,
+  ellipsoid?: string
 ) {
   const vertexCount = steps * steps;
   const positionValues = new Float32Array(vertexCount * 3);
@@ -439,18 +513,22 @@ function makeHealpixGeometry(
   const latitudes = new Float32Array(vertexCount);
   const longitudes = new Float32Array(vertexCount);
   const latLonValues = new Float32Array(vertexCount * 2);
+  const onEllipsoid = ellipsoid === "WGS84";
   let vertexIndex = 0;
 
   for (let i = 0; i < steps; ++i) {
     const u = i / (steps - 1);
     for (let j = 0; j < steps; ++j) {
       const v = j / (steps - 1);
-      const vec = healpix.pixcoord2vec_nest(nside, ipix, u, v);
-      const { lat, lon } = ProjectionHelper.cartesianToLatLon(
-        vec[0],
-        vec[1],
-        vec[2]
-      );
+      // On an ellipsoid, use @eopf-dggs/healpix-geo for the pixel→vector
+      // mapping and convert the authalic latitude it returns to geodetic.
+      // Otherwise keep the spherical @hscmap/healpix path unchanged.
+      const vec = onEllipsoid
+        ? pixcoord2vecNestNside(nside, BigInt(ipix), u, v)
+        : healpix.pixcoord2vec_nest(nside, ipix, u, v);
+      const ll = ProjectionHelper.cartesianToLatLon(vec[0], vec[1], vec[2]);
+      const lat = onEllipsoid ? authalicToGeodeticWGS84(ll.lat) : ll.lat;
+      const lon = ll.lon;
       latitudes[vertexIndex] = lat;
       longitudes[vertexIndex] = lon;
       const positionOffset = vertexIndex * 3;

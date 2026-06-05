@@ -45,6 +45,35 @@ export function isAzimuthalProjectionType(type: TProjectionType) {
   );
 }
 
+// WGS84 first eccentricity squared (e^2).
+const WGS84_E2 = 0.00669437999014;
+
+/**
+ * Convert an authalic (equal-area) latitude to a geodetic latitude on the
+ * WGS84 ellipsoid, using the Snyder (1987) series expansion.
+ *
+ * HEALPix is an equal-area pixelisation, so when its pixels are defined on an
+ * ellipsoid (DGGS convention with `ellipsoid: WGS84`), the cell coordinates
+ * come back as authalic latitudes. They must be converted to geodetic
+ * latitudes before projecting, otherwise the data is shifted by up to ~0.2°
+ * (≈20 km) relative to coastlines and other geographic overlays.
+ *
+ * On a perfect sphere (no ellipsoid) authalic == geodetic, so this is only
+ * applied when an ellipsoid is detected.
+ */
+export function authalicToGeodeticWGS84(authalicLatDeg: number): number {
+  const e2 = WGS84_E2;
+  const e4 = e2 * e2;
+  const e6 = e4 * e2;
+  const phi = MathUtils.degToRad(authalicLatDeg);
+  const geodetic =
+    phi +
+    (e2 / 3 + (31 * e4) / 180 + (517 * e6) / 5040) * Math.sin(2 * phi) +
+    ((23 * e4) / 360 + (251 * e6) / 3780) * Math.sin(4 * phi) +
+    ((761 * e6) / 45360) * Math.sin(6 * phi);
+  return MathUtils.radToDeg(geodetic);
+}
+
 export class ProjectionHelper {
   readonly type: TProjectionType;
   readonly isFlat: boolean;
