@@ -277,12 +277,11 @@ function fetchGrid() {
   }
 }
 
-async function getHealpixCRSInfo() {
-  let nside: number | undefined;
-  let ellipsoid: string | undefined;
-
-  // DGGS convention first (e.g. EOPF): the grid group carries a `dggs` attribute
-  // with refinement_level (= HEALPix order, nside = 2**order) and an ellipsoid.
+// Read nside (from dggs.refinement_level) and ellipsoid from the group's `dggs`.
+async function readDggsCrsInfo(): Promise<{
+  nside?: number;
+  ellipsoid?: string;
+}> {
   try {
     const source = ZarrDataManager.getDatasetSource(
       activeDatasources.value!,
@@ -290,18 +289,28 @@ async function getHealpixCRSInfo() {
     );
     const group = await ZarrDataManager.getDatasetGroup(source);
     const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
-    if (dggs) {
-      if (typeof dggs.refinement_level === "number") {
-        nside = 2 ** (dggs.refinement_level as number);
-      }
-      if (dggs.ellipsoid) {
-        const ell = dggs.ellipsoid as Record<string, unknown>;
-        ellipsoid = (ell.name as string)?.toUpperCase() || undefined;
-      }
+    if (!dggs) {
+      return {};
     }
+    const nside =
+      typeof dggs.refinement_level === "number"
+        ? 2 ** dggs.refinement_level
+        : undefined;
+    const ell = dggs.ellipsoid as Record<string, unknown> | undefined;
+    const ellipsoid = ell?.name
+      ? (ell.name as string).toUpperCase()
+      : undefined;
+    return { nside, ellipsoid };
   } catch {
-    // Fall through to the CF crs-variable convention
+    return {};
   }
+}
+
+async function getHealpixCRSInfo() {
+  // DGGS convention first (e.g. EOPF): dggs.refinement_level -> nside.
+  const dggsInfo = await readDggsCrsInfo();
+  let nside: number | undefined = dggsInfo.nside;
+  let ellipsoid: string | undefined = dggsInfo.ellipsoid;
 
   // CF crs-variable convention (grid_mapping_name=healpix, healpix_nside)
   if (nside === undefined) {
@@ -337,7 +346,9 @@ async function getHealpixCRSInfo() {
     }
   }
   if (nside === undefined) {
-    throw new Error("Could not determine HEALPix nside (no dggs or crs metadata)");
+    throw new Error(
+      "Could not determine HEALPix nside (no dggs or crs metadata)"
+    );
   }
   console.log("HEALPix CRS info: nside=", nside, "ellipsoid=", ellipsoid);
   return { nside, ellipsoid };

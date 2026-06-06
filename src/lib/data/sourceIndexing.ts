@@ -205,19 +205,27 @@ function zarrRoot(url: string): string {
  * consolidated metadata of its own. We therefore drive everything from the root
  * consolidated metadata instead of recursing into the (metadata-less) level groups.
  */
+type TLayout = Array<{ asset: string; [key: string]: unknown }>;
+
+/** Find a `multiscales.layout` carried by any group node in the metadata tree. */
+function findMultiscalesLayout(
+  metadata: Record<string, zarr.ArrayMetadata | zarr.GroupMetadata>
+): TLayout | undefined {
+  for (const node of Object.values(metadata)) {
+    const attrs = (node as { attributes?: Record<string, unknown> }).attributes;
+    const ms = attrs?.multiscales as { layout?: TLayout } | undefined;
+    if (node.node_type === "group" && ms?.layout?.length) {
+      return ms.layout;
+    }
+  }
+  return undefined;
+}
+
 function buildEopfMultiscalesIndex(
   rootSrc: string,
   metadata: Record<string, zarr.ArrayMetadata | zarr.GroupMetadata>
 ): TSources | null {
-  let layout: Array<{ asset: string; [key: string]: unknown }> | undefined;
-  for (const node of Object.values(metadata)) {
-    const attrs = (node as { attributes?: Record<string, unknown> }).attributes;
-    const ms = attrs?.multiscales as { layout?: typeof layout } | undefined;
-    if (node.node_type === "group" && ms?.layout?.length) {
-      layout = ms.layout;
-      break;
-    }
-  }
+  const layout = findMultiscalesLayout(metadata);
   if (!layout?.length) {
     return null;
   }
@@ -293,7 +301,10 @@ export async function indexFromZarr(src: string): Promise<TSources> {
     // consolidated metadata (the level groups have no metadata to recurse into).
     const consolidated = rootAttrs?.consolidated_metadata?.metadata;
     if (consolidated) {
-      const eopf = buildEopfMultiscalesIndex(src.replace(/\/+$/, ""), consolidated);
+      const eopf = buildEopfMultiscalesIndex(
+        src.replace(/\/+$/, ""),
+        consolidated
+      );
       if (eopf) {
         return eopf;
       }
