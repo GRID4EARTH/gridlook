@@ -278,14 +278,11 @@ function fetchGrid() {
 }
 
 async function getHealpixCRSInfo() {
-  const crs = await ZarrDataManager.getCRSInfo(
-    activeDatasources.value!,
-    varnameSelector.value
-  );
-  // FIXME: could probably have other names
-  const nside = crs.attrs["healpix_nside"] as number;
-  // Check DGGS convention for ellipsoid, then CRS attrs, then cell coordinate attrs
+  let nside: number | undefined;
   let ellipsoid: string | undefined;
+
+  // DGGS convention first (e.g. EOPF): the grid group carries a `dggs` attribute
+  // with refinement_level (= HEALPix order, nside = 2**order) and an ellipsoid.
   try {
     const source = ZarrDataManager.getDatasetSource(
       activeDatasources.value!,
@@ -293,15 +290,29 @@ async function getHealpixCRSInfo() {
     );
     const group = await ZarrDataManager.getDatasetGroup(source);
     const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
-    if (dggs?.ellipsoid) {
-      const ell = dggs.ellipsoid as Record<string, unknown>;
-      ellipsoid = (ell.name as string)?.toUpperCase() || undefined;
+    if (dggs) {
+      if (typeof dggs.refinement_level === "number") {
+        nside = 2 ** (dggs.refinement_level as number);
+      }
+      if (dggs.ellipsoid) {
+        const ell = dggs.ellipsoid as Record<string, unknown>;
+        ellipsoid = (ell.name as string)?.toUpperCase() || undefined;
+      }
     }
   } catch {
-    // Fall through
+    // Fall through to the CF crs-variable convention
   }
-  if (!ellipsoid) {
-    ellipsoid = (crs.attrs["healpix_ellipsoid"] as string) || undefined;
+
+  // CF crs-variable convention (grid_mapping_name=healpix, healpix_nside)
+  if (nside === undefined) {
+    const crs = await ZarrDataManager.getCRSInfo(
+      activeDatasources.value!,
+      varnameSelector.value
+    );
+    nside = crs.attrs["healpix_nside"] as number;
+    if (!ellipsoid) {
+      ellipsoid = (crs.attrs["healpix_ellipsoid"] as string) || undefined;
+    }
   }
   if (!ellipsoid) {
     try {
@@ -324,6 +335,9 @@ async function getHealpixCRSInfo() {
     } catch (e) {
       console.log("Could not read cell coordinate ellipsoid:", e);
     }
+  }
+  if (nside === undefined) {
+    throw new Error("Could not determine HEALPix nside (no dggs or crs metadata)");
   }
   console.log("HEALPix CRS info: nside=", nside, "ellipsoid=", ellipsoid);
   return { nside, ellipsoid };

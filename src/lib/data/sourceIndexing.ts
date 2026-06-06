@@ -224,6 +224,10 @@ function buildEopfMultiscalesIndex(
 
   const finest = layout[0].asset.replace(/^\/+|\/+$/g, ""); // e.g. measurements/reflectance/20
   const prefix = finest + "/";
+  const root = zarrRoot(rootSrc);
+  // store points directly at the (finest) level group; the multiscales LOD swaps
+  // this store for other levels via rewriteDatasourcesUrl, so `dataset` stays "".
+  const finestUrl = root + "/" + finest;
   const datasources: Record<string, TDataSource> = {};
   for (const [key, node] of Object.entries(metadata)) {
     if (node.node_type !== "array" || !key.startsWith(prefix)) {
@@ -235,8 +239,8 @@ function buildEopfMultiscalesIndex(
     }
     const arrayNode = node as zarr.ArrayMetadata;
     datasources[varname] = {
-      store: rootSrc,
-      dataset: finest,
+      store: finestUrl,
+      dataset: "",
       hidden:
         varname === "cell_ids" ||
         !isValidVariable(varname, arrayNode.shape, arrayNode.dimension_names),
@@ -252,11 +256,11 @@ function buildEopfMultiscalesIndex(
 
   return {
     zarr_format: ZARR_FORMAT.V3, // eslint-disable-line camelcase
-    multiscales: { baseUrl: zarrRoot(rootSrc), layout },
+    multiscales: { baseUrl: root, layout },
     levels: [
       {
-        grid: { store: rootSrc, dataset: finest },
-        time: { store: rootSrc, dataset: finest },
+        grid: { store: finestUrl, dataset: "" },
+        time: { store: finestUrl, dataset: "" },
         datasources,
       },
     ],

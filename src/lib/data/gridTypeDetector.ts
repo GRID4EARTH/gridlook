@@ -162,6 +162,20 @@ export async function getGridType(
       varnameSelector
     );
 
+    // DGGS convention (e.g. EOPF HEALPix): the grid group carries a `dggs`
+    // attribute instead of a CF `grid_mapping` CRS variable.
+    try {
+      const group = await ZarrDataManager.getDatasetGroup(
+        ZarrDataManager.getDatasetSource(datasources!, varnameSelector)
+      );
+      const dggs = group.attrs?.dggs as { name?: string } | undefined;
+      if (typeof dggs?.name === "string" && dggs.name.toLowerCase() === "healpix") {
+        return GRID_TYPES.HEALPIX;
+      }
+    } catch {
+      // not a DGGS store — continue with the other checks
+    }
+
     // Check CRS-based grid types
     const crsGridType = await determineGridTypeFromCRS(
       datasources!,
