@@ -55,6 +55,25 @@ function checkHealpixGrid(crs: zarr.Array<zarr.DataType, zarr.FetchStore>) {
   return crs.attrs["grid_mapping_name"] === "healpix";
 }
 
+// DGGS convention (e.g. EOPF HEALPix): the grid group carries a `dggs` attribute
+// instead of a CF `grid_mapping` CRS variable.
+async function checkDggsHealpix(
+  datasources: TSources,
+  varname: string
+): Promise<boolean> {
+  try {
+    const group = await ZarrDataManager.getDatasetGroup(
+      ZarrDataManager.getDatasetSource(datasources, varname)
+    );
+    const dggs = group.attrs?.dggs as { name?: string } | undefined;
+    return (
+      typeof dggs?.name === "string" && dggs.name.toLowerCase() === "healpix"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function checkRegularRotatedGrid(
   crs: zarr.Array<zarr.DataType, zarr.FetchStore>
 ) {
@@ -161,6 +180,11 @@ export async function getGridType(
       ZarrDataManager.getDatasetSource(datasources!, varnameSelector),
       varnameSelector
     );
+
+    // DGGS-convention HEALPix (e.g. EOPF)
+    if (await checkDggsHealpix(datasources!, varnameSelector)) {
+      return GRID_TYPES.HEALPIX;
+    }
 
     // Check CRS-based grid types
     const crsGridType = await determineGridTypeFromCRS(

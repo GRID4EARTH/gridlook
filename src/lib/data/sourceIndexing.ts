@@ -191,6 +191,90 @@ function createIndex(
   };
 }
 
+/** The Zarr store root of a URL — everything up to and including ".zarr". */
+function zarrRoot(url: string): string {
+  const marker = ".zarr";
+  const i = url.indexOf(marker);
+  return i >= 0 ? url.slice(0, i + marker.length) : url.replace(/\/+$/, "");
+}
+
+/**
+ * Build an index for an EOPF-style store, where consolidated metadata lives only
+ * at the Zarr root, a subgroup carries a `multiscales` layout (with root-relative
+ * `asset` paths), and each level group holds the variables + `cell_ids` but has no
+ * consolidated metadata of its own. We therefore drive everything from the root
+ * consolidated metadata instead of recursing into the (metadata-less) level groups.
+ */
+type TLayout = Array<{ asset: string; [key: string]: unknown }>;
+
+/** Find a `multiscales.layout` carried by any group node in the metadata tree. */
+function findMultiscalesLayout(
+  metadata: Record<string, zarr.ArrayMetadata | zarr.GroupMetadata>
+): TLayout | undefined {
+  for (const node of Object.values(metadata)) {
+    const attrs = (node as { attributes?: Record<string, unknown> }).attributes;
+    const ms = attrs?.multiscales as { layout?: TLayout } | undefined;
+    if (node.node_type === "group" && ms?.layout?.length) {
+      return ms.layout;
+    }
+  }
+  return undefined;
+}
+
+function buildEopfMultiscalesIndex(
+  rootSrc: string,
+  metadata: Record<string, zarr.ArrayMetadata | zarr.GroupMetadata>
+): TSources | null {
+  const layout = findMultiscalesLayout(metadata);
+  if (!layout?.length) {
+    return null;
+  }
+
+  const finest = layout[0].asset.replace(/^\/+|\/+$/g, ""); // e.g. measurements/reflectance/20
+  const prefix = finest + "/";
+  const root = zarrRoot(rootSrc);
+  // store points directly at the (finest) level group; the multiscales LOD swaps
+  // this store for other levels via rewriteDatasourcesUrl, so `dataset` stays "".
+  const finestUrl = root + "/" + finest;
+  const datasources: Record<string, TDataSource> = {};
+  for (const [key, node] of Object.entries(metadata)) {
+    if (node.node_type !== "array" || !key.startsWith(prefix)) {
+      continue;
+    }
+    const varname = key.slice(prefix.length);
+    if (varname.includes("/")) {
+      continue; // only direct children of the finest level group
+    }
+    const arrayNode = node as zarr.ArrayMetadata;
+    datasources[varname] = {
+      store: finestUrl,
+      dataset: "",
+      hidden:
+        varname === "cell_ids" ||
+        !isValidVariable(varname, arrayNode.shape, arrayNode.dimension_names),
+      attrs: {
+        ...node.attributes,
+        dimensionNames: arrayNode.dimension_names,
+      } as Record<string, unknown>,
+    };
+  }
+  if (Object.keys(datasources).length === 0) {
+    return null;
+  }
+
+  return {
+    zarr_format: ZARR_FORMAT.V3, // eslint-disable-line camelcase
+    multiscales: { baseUrl: root, layout },
+    levels: [
+      {
+        grid: { store: finestUrl, dataset: "" },
+        time: { store: finestUrl, dataset: "" },
+        datasources,
+      },
+    ],
+  };
+}
+
 export async function indexFromZarr(src: string): Promise<TSources> {
   try {
     const store = await zarr.withConsolidated(lru(createFetchStore(src)));
@@ -207,20 +291,35 @@ export async function indexFromZarr(src: string): Promise<TSources> {
       createFetchStore(src)
     );
 
-    // Detect multiscales metadata: redirect to the finest level subgroup
     // Note: openZarrV3Metadata puts the full zarr.json as group.attrs,
     // so actual group attributes are nested under group.attrs.attributes
     const rootAttrs = group.attrs as TZarrV3RootMetadata;
     const groupAttrs = (rootAttrs?.attributes ?? {}) as Record<string, unknown>;
+
+    // EOPF-style store: consolidated metadata only at the root, with a multiscales
+    // group whose level groups carry the variables. Drive the index from the root
+    // consolidated metadata (the level groups have no metadata to recurse into).
+    const consolidated = rootAttrs?.consolidated_metadata?.metadata;
+    if (consolidated) {
+      const eopf = buildEopfMultiscalesIndex(
+        src.replace(/\/+$/, ""),
+        consolidated
+      );
+      if (eopf) {
+        return eopf;
+      }
+    }
+
+    // multiscales attr directly on this group: redirect to the finest level,
+    // resolving the (root-relative) asset path against the Zarr root so the
+    // path is not doubled.
     if (groupAttrs?.multiscales) {
       const ms = groupAttrs.multiscales as {
         layout: Array<{ asset: string; [key: string]: unknown }>;
       };
       if (ms.layout?.length > 0) {
-        const baseUrl = src.replace(/\/$/, "");
-        const finestAsset = ms.layout[0].asset;
-        const levelUrl = baseUrl + "/" + finestAsset;
-        // Recursively index the subgroup (it's a regular zarr group)
+        const baseUrl = zarrRoot(src);
+        const levelUrl = baseUrl + "/" + ms.layout[0].asset.replace(/^\/+/, "");
         const index = await indexFromZarr(levelUrl);
         index.multiscales = { baseUrl, layout: ms.layout };
         return index;
