@@ -52,7 +52,6 @@
     "humanize-duration": "^3.35",
     "icechunk-js": "^0.6.0",
     "kdbush": "4.1.0",
-    "maplibre-gl": "^6.11.1",
     "pinia": "^3.0.4",
     "proj4": "^2.22.0",
     "qrcode": "^1.5.4",
