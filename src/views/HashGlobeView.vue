@@ -15,8 +15,10 @@ import type { TURLParameterValues } from "@/utils/urlParams.ts";
 
 type TParams = Partial<Record<TURLParameterValues, string>>;
 
+// GRID4EARTH: global ERA5 on HEALPix (WGS84 ellipsoid), also in static/catalog.json
 const DEFAULT_DATASET =
-  "https://storage.googleapis.com/cmip6/CMIP6/ScenarioMIP/AWI/AWI-CM-1-1-MR/ssp585/r1i1p1f1/day/sfcWind/gn/v20190529/";
+  "https://data.grid4earth.eu/auxiliary/reanalysis-era5-complete/S00__ADF_ECMWA_20180504T210000_20180504T210000_20260619T111831.zarr";
+const DEFAULT_VARNAME = "measurements/enda/t2m";
 
 const DEFAULT_CATALOG = "static/catalog.json";
 const DEFAULT_BASEMAP_CATALOG = "static/basemaps.json";
@@ -79,6 +81,7 @@ const onHashChange = () => {
   } else {
     store.catalogUrl = DEFAULT_CATALOG;
     store.basemapCatalogUrl = DEFAULT_BASEMAP_CATALOG;
+    urlParameterStore.paramVarname = DEFAULT_VARNAME;
     src.value = defaultSrc.value;
   }
 };
