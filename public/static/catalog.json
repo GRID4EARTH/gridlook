@@ -3,17 +3,20 @@
   "title": "GRID4EARTH",
   "datasets": [
     {
-      "title": "Sentinel-2 L1C converted - S2C 2025-04-12 T32TPS",
+      "title": "S2 L1C - T32TPS 2025-04-12",
+      "description": "converted/sentinel-2-l1c, 13 bands. Pick a level group: 20 (10 m bands), 19 (20 m bands), 17 (60 m bands).",
       "url": "https://data.grid4earth.eu/converted/sentinel-2-l1c/S2C_MSIL1C_20250412T101041_N0511_R022_T32TPS_20250412T134850.zarr",
       "tag": "healpix"
     },
     {
-      "title": "Sentinel-2 L2A converted - S2C 2025-06-13 T31UDQ (Paris)",
+      "title": "S2 L2A - Paris T31UDQ 2025-06-13",
+      "description": "converted/sentinel-2-l2a. Pick a level group: 20 (10 m bands), 19 and 17 (native bands plus the ESA resampled copies).",
       "url": "https://data.grid4earth.eu/converted/sentinel-2-l2a/S2C_MSIL2A_20250613T104641_N0511_R051_T31UDQ_20250613T134507.zarr",
       "tag": "healpix"
     },
     {
-      "title": "Sentinel-2 L1C multi-resolution (mean-l20-l12) - S2C 2025-04-12 T32TPS",
+      "title": "S2 L1C multires - T32TPS 2025-04-12",
+      "description": "converted/sentinel-2-l1c-multires/mean-l20-l12. Experimental: each band starts at its native level, coarser levels are the mean of the finer one. Pick the level (12-20) by hand here; switching with the zoom needs d70-t/gridlook#235.",
       "url": "https://data.grid4earth.eu/converted/sentinel-2-l1c-multires/mean-l20-l12/S2C_MSIL1C_20250412T101041_N0511_R022_T32TPS_20250412T134850.zarr/measurements/reflectance",
       "tag": "healpix"
     }
