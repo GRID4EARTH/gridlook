@@ -129,7 +129,7 @@ export function useBasemapLayer(options: TOptions) {
     layer.setOpacity(entry?.opacity ?? LAYER_OPACITY.MAX);
 
     const visible = Boolean(entry?.visible && store.basemapAvailable);
-    
+
     const map = layer.getBasemap();
     map.visible = visible;
 
