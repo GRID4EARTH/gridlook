@@ -15,12 +15,13 @@ import type { TURLParameterValues } from "@/utils/urlParams.ts";
 
 type TParams = Partial<Record<TURLParameterValues, string>>;
 
-// GRID4EARTH: global ERA5 on HEALPix (WGS84 ellipsoid), also in static/catalog.json
+// GRID4EARTH: global ERA5 on HEALPix (WGS84 ellipsoid), also in the catalog below
 const DEFAULT_DATASET =
   "https://data.grid4earth.eu/auxiliary/reanalysis-era5-complete/S00__ADF_ECMWA_20180504T210000_20180504T210000_20260619T111831.zarr";
 const DEFAULT_VARNAME = "measurements/enda/t2m";
 
-const DEFAULT_CATALOG = "static/catalog.json";
+// GRID4EARTH: written by `stac-scraper gridlook-catalog` with the STAC metadata
+const DEFAULT_CATALOG = "https://data.grid4earth.eu/gridlook-catalog.json";
 const DEFAULT_BASEMAP_CATALOG = "static/basemaps.json";
 
 const defaultSrc = ref(DEFAULT_DATASET);

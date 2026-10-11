@@ -65,7 +65,7 @@ it will be available at:
 
 `/static/my-catalog.json`
 
-The current default catalog in this repository is [`public/static/catalog.json`](/public/static/catalog.json).
+The GRID4EARTH deployment does not ship a catalog: its default catalog is `https://data.grid4earth.eu/gridlook-catalog.json`, written by `stac-scraper gridlook-catalog` from the collection templates of [GRID4EARTH/stac-scraper](https://github.com/GRID4EARTH/stac-scraper) (see its README).
 
 If you want your deployment to open a different default catalog on first load, update `DEFAULT_CATALOG` in [`src/views/HashGlobeView.vue`](/src/views/HashGlobeView.vue).
 
