@@ -277,13 +277,30 @@ function fetchGrid() {
   }
 }
 
+/**
+ * nside from the CRS attributes (`healpix_nside`, or the DGGS convention's
+ * `refinement_level`), falling back to the group's `dggs.refinement_level`.
+ */
+function healpixNside(
+  crsAttrs: Record<string, unknown>,
+  dggs: Record<string, unknown> | undefined
+): number {
+  if (typeof crsAttrs.healpix_nside === "number") {
+    return crsAttrs.healpix_nside;
+  }
+  const level = crsAttrs.refinement_level ?? dggs?.refinement_level;
+  if (typeof level === "number") {
+    return 2 ** level;
+  }
+  return NaN;
+}
+
 async function getHealpixCRSInfo() {
   const crs = await ZarrDataManager.getCRSInfo(
     activeDatasources.value!,
     varnameSelector.value
   );
-  // FIXME: could probably have other names
-  const nside = crs.attrs["healpix_nside"] as number;
+  let dggs: Record<string, unknown> | undefined;
   // Check DGGS convention for ellipsoid, then CRS attrs, then cell coordinate attrs
   let ellipsoid: string | undefined;
   try {
@@ -292,7 +309,7 @@ async function getHealpixCRSInfo() {
       varnameSelector.value
     );
     const group = await ZarrDataManager.getDatasetGroup(source);
-    const dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
+    dggs = group.attrs?.dggs as Record<string, unknown> | undefined;
     if (dggs?.ellipsoid) {
       const ell = dggs.ellipsoid as Record<string, unknown>;
       ellipsoid = (ell.name as string)?.toUpperCase() || undefined;
@@ -325,6 +342,7 @@ async function getHealpixCRSInfo() {
       console.log("Could not read cell coordinate ellipsoid:", e);
     }
   }
+  const nside = healpixNside(crs.attrs, dggs);
   console.log("HEALPix CRS info: nside=", nside, "ellipsoid=", ellipsoid);
   return { nside, ellipsoid };
 }

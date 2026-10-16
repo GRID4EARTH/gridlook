@@ -27,6 +27,22 @@ This branch (`healpix-geo`) extends GridLook with native support for [HEALPix](h
 
 Grid type is auto-detected from the Zarr metadata — no user configuration needed.
 
+### Sentinel-2 reflectance codecs (`hcc-sentinel2-pyramid`, `hcc-sentinel2`)
+
+The GRID4EARTH Sentinel-2 L2A HEALPix products store their reflectance bands with the
+Zarr v3 serializers of [healpix-compress](https://github.com/jmdelouis/healpix-compress):
+`hcc-sentinel2-pyramid` (lossy: the parent level as lossless digital numbers, the
+children predicted from it plus a quantised detail, all JPEG XL coded) and `hcc-sentinel2`
+(lossless digital numbers in JPEG XL). GridLook registers decoders for both with
+[zarrita](https://github.com/manzt/zarrita.js) in `src/lib/data/codecs/hcc/`. JPEG XL is
+decoded by [jxl-oxide-wasm](https://github.com/tirr-c/jxl-oxide), loaded on first use
+only; no-data cells come out as `NaN`, so they render transparent. The codecs are
+decode-only.
+
+The decoders are tested against vectors produced by the Python reference implementation
+(`npm test`); `scripts/make_hcc_fixtures.py` regenerates them from an environment where
+`hcc` is installed (and `s3fs` for the real chunks).
+
 ## Try It Live
 
 Visit the deployed viewer:
@@ -73,6 +89,12 @@ npm run build       # type-check + production build
 npm run lint-ci     # ESLint (zero warnings)
 npm run lint:fix    # auto-fix
 npm run typecheck   # vue-tsc type checking
+```
+
+### Tests
+
+```sh
+npm test            # vitest: codec decoders against reference test vectors
 ```
 
 ## CORS & Hosting Notes
