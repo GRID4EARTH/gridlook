@@ -1,0 +1,40 @@
+{
+  "shape": [],
+  "data_type": "int8",
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": []
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": 0,
+  "codecs": [
+    {
+      "name": "bytes"
+    },
+    {
+      "name": "zstd",
+      "configuration": {
+        "level": 0,
+        "checksum": false
+      }
+    }
+  ],
+  "attributes": {
+    "grid_mapping_name": "healpix",
+    "refinement_level": 12,
+    "indexing_scheme": "nested",
+    "reference_ellipsoid_name": "WGS84",
+    "semi_major_axis": 6378137.0,
+    "inverse_flattening": 298.257223563
+  },
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}
