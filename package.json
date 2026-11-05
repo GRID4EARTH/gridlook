@@ -64,7 +64,7 @@
     "vue-router": "^5.3.1",
     "vue3-select-component": "^1.0.1",
     "zarrita": "^0.7.5",
-    "zarrita-hcc": "github:GRID4EARTH/zarrita-hcc#v0.1.0"
+    "zarrita-hcc": "github:GRID4EARTH/zarrita-hcc#v0.1.1"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
